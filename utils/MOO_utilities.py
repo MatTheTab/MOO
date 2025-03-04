@@ -3,6 +3,8 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 
+from cvxopt import matrix, solvers
+
 ORDER = ["SuperFuture", "Apples", "WorldNow", "Electronics123", "Photons", "SpaceNow", "PearPear",
          "PositiveCorrelation", "BetterTechnology", "ABCDE", "EnviroLike", "Moneymakers", "Fuel4",
          "MarsProject", "CPU-XYZ", "RoboticsX", "Lasers", "WaterForce", "SafeAndCare", "BetterTomorrow"]
@@ -114,6 +116,10 @@ class Solver():
         self.predicted_vals = predicted_vals
         self.risks = risks
 
+        self.current_prices = np.array([x[-1] for x in [self.data[y] for y in ORDER]])
+        self.predicted_prices = np.array([x[-1] for x in [self.predicted_vals[y] for y in ORDER]])
+        self.expected_returns = self.predicted_prices/self.current_prices - 1
+
     def plot_predictions(self, company_name=None):
         if company_name is None:
             company_name = random.choice(list(self.data.keys()))
@@ -137,3 +143,36 @@ class Solver():
         plt.legend()
         plt.grid(True)
         plt.show()
+
+    def solve(self, w1, w2):
+        n = len(self.expected_returns)
+
+        # Transpose because of library and *2 because of the formula TODO verify
+        Q = 2 * w1 * matrix(self.risks.T)
+        c = w2 * matrix(self.expected_returns)
+
+        # Constraints: Sum of weights = 1
+        A = matrix(np.ones((1, n)))
+        b = matrix(1.0)
+
+        # Inequality constraints: 0 <= w <= 1
+        G = matrix(np.vstack((-np.eye(n), np.eye(n))))
+        h = matrix(np.hstack((np.zeros(n), np.ones(n))))
+
+        sol = solvers.qp(Q, c, G, h, A, b)
+
+        return sol
+    
+    def solve_sampled_weights(self):
+        weights1 = np.arange(0, 1.01, 0.05)
+        weights2 = np.ones(len(weights1)) - weights2
+
+        solutions = []
+        for w1, w2 in zip(weights1, weights2):
+            sol = self.solve(w1, w2)
+            sol_weights = np.array(sol["x"])
+            f1 = sum(sol_weights * self.expected_returns)
+            f2 = sol_weights.T @ self.risks @ sol_weights
+            solutions.append((f1, f2, sol_weights))
+
+        return solutions    
