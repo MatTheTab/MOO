@@ -1,6 +1,11 @@
 import os
 import random
+import numpy as np
 import matplotlib.pyplot as plt
+
+ORDER = ["SuperFuture", "Apples", "WorldNow", "Electronics123", "Photons", "SpaceNow", "PearPear",
+         "PositiveCorrelation", "BetterTechnology", "ABCDE", "EnviroLike", "Moneymakers", "Fuel4",
+         "MarsProject", "CPU-XYZ", "RoboticsX", "Lasers", "WaterForce", "SafeAndCare", "BetterTomorrow"]
 
 class DataReader():
     def __init__(self, dir_path):
@@ -49,7 +54,7 @@ class DataReader():
         else:
             plt.xlim([0, val_range])
             plt.xticks(range(0, val_range, 10))
-        
+
 
         plt.grid(True)
         plt.show()
@@ -95,6 +100,13 @@ class RegressionModelsCombined():
 
     def train_NODE():
         pass
+    
+    def get_covariance_matrix(self, data_window=1.0):
+        arr = np.array([(a:=self.data[k])[int((1-data_window)*len(a)):] for k in ORDER])
+        covariance_mat = np.cov(arr)
+        
+        return covariance_mat
+
 
 class Solver():
     def __init__(self, data, predicted_vals, risks):
