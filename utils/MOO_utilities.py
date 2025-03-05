@@ -11,6 +11,10 @@ import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from cvxopt import matrix, solvers
+import xgboost as xgb
+import torch
+import torch.nn as nn
+import torchdiffeq
 
 ORDER = ["SuperFuture", "Apples", "WorldNow", "Electronics123", "Photons", "SpaceNow", "PearPear",
          "PositiveCorrelation", "BetterTechnology", "ABCDE", "EnviroLike", "Moneymakers", "Fuel4",
@@ -21,6 +25,41 @@ def sinusoidal_function(x, A1, B1, C1, A2, B2, C2, D):
 
 def complex_sinusoidal_function(x, a, A1, B1, C1, A2, B2, C2, D):
     return a * x + A1 * np.sin(B1 * x + C1) + A2 * np.sin(B2 * x + C2) + D
+
+def flat_append(lst1, lst2):
+    if isinstance(lst1, np.ndarray): lst1 = lst1.tolist()
+    if isinstance(lst2, np.ndarray): lst2 = lst2.tolist()
+    result = []
+    for val in lst1:
+        result.append(val)
+    for val in lst2:
+        result.append(val)
+    return result
+
+class ODEFunc(nn.Module):
+    def __init__(self, hidden_dim):
+        super(ODEFunc, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, 50),
+            nn.Tanh(),
+            nn.Linear(50, hidden_dim)
+        )
+
+    def forward(self, t, y):
+        return self.net(y)
+
+class NODETimeSeries(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super(NODETimeSeries, self).__init__()
+        self.encoder = nn.Linear(input_dim, hidden_dim)
+        self.odefunc = ODEFunc(hidden_dim)
+        self.ode_solver = torchdiffeq.odeint
+        self.decoder = nn.Linear(hidden_dim, input_dim)
+
+    def forward(self, x, t):
+        h0 = self.encoder(x)
+        hT = self.ode_solver(self.odefunc, h0, t)
+        return self.decoder(hT)
 
 class DataReader():
     def __init__(self, dir_path):
@@ -105,11 +144,10 @@ class DataReader():
         plt.show()
 
 class RegressionModelsCombined():
-    def __init__(self, data, window_size=10, test_size=0.2):
+    def __init__(self, data, window_size=10):
         self.data = data
         self.data_size = len(data[list(data.keys())[0]])
         self.window_size = window_size
-        self.test_size = test_size
         self.models = {}
 
     def set_windows_size(self, window_size):
@@ -127,8 +165,6 @@ class RegressionModelsCombined():
         self.y = {}
         self.X_train = {}
         self.y_train = {}
-        self.X_test = {}
-        self.y_test = {}
         
         for company_name in self.data.keys():
             company_data = self.data[company_name]
@@ -141,10 +177,6 @@ class RegressionModelsCombined():
 
             self.X[company_name] = np.array(company_X.copy(), dtype=np.float32)
             self.y[company_name] = np.array(company_y.copy(), dtype=np.float32)
-            self.X_train[company_name] = np.array(company_X[:int(len(company_X)*(1-self.test_size))].copy(), dtype=np.float32)
-            self.X_test[company_name] = np.array(company_X[int(len(company_X)*(1-self.test_size)):].copy(), dtype=np.float32)
-            self.y_train[company_name] = np.array(company_y[:int(len(company_y)*(1-self.test_size))].copy(), dtype=np.float32)
-            self.y_test[company_name] = np.array(company_y[int(len(company_y)*(1-self.test_size)):].copy(), dtype=np.float32)
     
     def train_linear(self):
         self.y_preds = {}
@@ -211,7 +243,6 @@ class RegressionModelsCombined():
 
     def train_arima(self, p, d, q):
         self.models = {}
-        self.y_preds = {}
         for company_name in self.data.keys():
             y = self.data[company_name]
             model = ARIMA(y, order=(p, d, q))
@@ -226,11 +257,67 @@ class RegressionModelsCombined():
             predictions[company_name] = (X_future.flatten(), forecast)
         return predictions
     
-    def train_XGBOOST():
-        pass
-
-    def train_NODE():
-        pass
+    def train_xgboost(self):
+        self.models = {}
+        for company_name in self.data.keys():
+            X_train = self.X[company_name]
+            y_train = self.y[company_name]
+            model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100, max_depth=4)
+            model.fit(X_train, y_train)
+            self.models[company_name] = model
+        
+    def predict_xgboost(self, num_predictions=100):
+        predictions = {}
+        X_future = np.arange(self.data_size + 1, self.data_size + num_predictions + 1).reshape(-1, 1)
+        for company_name in self.data.keys():
+            curr_num_preds = 0
+            input_data = np.expand_dims(np.array(self.data[company_name][self.data_size - self.window_size:], dtype=np.float32), axis=0)
+            company_preds = []
+            while curr_num_preds<num_predictions:
+                y_preds = self.models[company_name].predict(input_data)
+                curr_num_preds += len(y_preds)
+                company_preds  = np.array(flat_append(company_preds, y_preds), dtype=np.float32)
+                input_data = np.array(flat_append(np.squeeze(input_data), y_preds), dtype=np.float32)
+                input_data = np.expand_dims(input_data[len(input_data)-self.window_size: ], axis=0)
+            company_preds = np.array(company_preds, dtype=np.float32)[:num_predictions]
+            predictions[company_name] = (X_future.flatten(), company_preds.copy())
+        return predictions
+                
+    def train_NODE(self, hidden_dim=10, num_epochs=2000, lr=0.01):
+        self.models = {}
+        self.loss_fn = nn.MSELoss()
+        self.optimizers = {}
+        
+        for company_name in self.data.keys():
+            t = torch.linspace(0, 1, steps=len(self.data[company_name]))
+            x = torch.tensor(self.data[company_name], dtype=torch.float32).unsqueeze(1)
+            
+            model = NODETimeSeries(input_dim=1, hidden_dim=hidden_dim)
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            
+            for epoch in range(num_epochs):
+                optimizer.zero_grad()
+                x_pred = model(x[0], t)
+                loss = self.loss_fn(x_pred.squeeze(), x.squeeze())
+                loss.backward()
+                optimizer.step()
+                
+                if epoch % 500 == 0:
+                    print(f'Company: {company_name}, Epoch {epoch}, Loss: {loss.item()}')
+            
+            self.models[company_name] = model
+            self.optimizers[company_name] = optimizer
+    
+    def predict_NODE(self, num_predictions=100):
+        predictions = {}
+        t_future = torch.linspace(1, 1 + num_predictions / len(self.data[list(self.data.keys())[0]]), steps=num_predictions)
+        
+        for company_name, model in self.models.items():
+            with torch.no_grad():
+                x_future = model(torch.tensor(self.data[company_name][-1], dtype=torch.float32).unsqueeze(0), t_future)
+            predictions[company_name] = (np.arange(self.data_size + 1, self.data_size + num_predictions + 1), x_future.squeeze().numpy())
+        
+        return predictions
     
     def get_covariance_matrix(self, data_window=1.0):
         arr = np.array([(a:=self.data[k])[int((1-data_window)*len(a)):] for k in ORDER])
@@ -275,69 +362,6 @@ class RegressionModelsCombined():
 
         plt.tight_layout()
         plt.show()
-
-    def plot_test_preds(self, val_range=None, figsize=(15, 5)):
-        if self.models is None:
-            print("First, train the model before plotting predictions.")
-            return
-
-        company_names = list(self.data.keys())
-        num_companies = len(company_names)
-        cols = 4
-        rows = math.ceil(num_companies / cols)
-
-        fig, axes = plt.subplots(rows, cols, figsize=figsize)
-        axes = axes.flatten()
-
-        for i, company_name in enumerate(company_names):
-            values = self.data[company_name]
-            timesteps = list(range(len(values)))
-            test_indices = list(range(len(values) - len(self.y_test[company_name]), len(values)))
-
-            axes[i].plot(timesteps, values, linestyle='-', markersize=3, color='blue', label='Actual Values')
-            axes[i].scatter(test_indices, self.y_preds_test[company_name], color='red', label='Predicted Values', marker='x')
-            
-            axes[i].set_title(company_name)
-            axes[i].set_xlabel("Timestep")
-            axes[i].set_ylabel("Value")
-            axes[i].grid(True)
-            axes[i].legend()
-            
-            if val_range is None:
-                axes[i].set_xticks(range(0, len(values), 10))
-            else:
-                axes[i].set_xlim([0, val_range])
-                axes[i].set_xticks(range(0, val_range, 10))
-
-        for j in range(i + 1, len(axes)):
-            fig.delaxes(axes[j])
-
-        plt.tight_layout()
-        plt.show()
-
-    def get_metrics(self, full=True):
-        if self.models is None:
-            print("First, initialize the model")
-            return
-        
-        if full and self.y_preds_full is None:
-            print("First, initialize the full model")
-        
-        for company_name in self.data.keys():
-            if full:
-                print(f"{company_name}:")
-                mae = mean_absolute_error(self.y[company_name], self.y_preds_full[company_name])
-                mse = mean_squared_error(self.y[company_name], self.y_preds_full[company_name])
-                print(f"MAE error: {mae}, MSE error: {mse}")
-
-            else:
-                print(f"{company_name}:")
-                mae_train = mean_absolute_error(self.y_train[company_name], self.y_preds_train[company_name])
-                mse_train = mean_squared_error(self.y_train[company_name], self.y_preds_train[company_name])
-                mae_test = mean_absolute_error(self.y_test[company_name], self.y_preds_test[company_name])
-                mse_test = mean_squared_error(self.y_test[company_name], self.y_preds_test[company_name])
-                print(f"Train MAE error: {mae_train}, MSE error: {mse_train}")
-                print(f"Test MAE error: {mae_test}, MSE error: {mse_test}")
 
 class Solver():
     def __init__(self, data, predicted_vals, risks):
