@@ -343,35 +343,55 @@ class Solver():
         weights1 = np.arange(0, 1.00001, step)
         weights2 = np.ones(len(weights1)) - weights1
 
-        print(weights1, weights2, weights1 + weights2)
         solutions = []
         for w1, w2 in zip(weights1, weights2):
             print(f"Running for w1={w1}, w2={w2}")
             sol = self.solve(float(w1), float(w2))
             sol_weights = np.array(sol["x"])
+            sol_weights = sol_weights.reshape(-1)
             sol_weights = sol_weights / np.sum(sol_weights)
-            f1 = sum(sol_weights.reshape(-1) * self.expected_returns)
-            f2 = (sol_weights.T @ self.risks @ sol_weights)[0][0]
+            f1 = sum(sol_weights * self.expected_returns)
+            f2 = sol_weights @ self.risks @ sol_weights.T
 
             solutions.append((f1, f2, sol_weights))
+        print(sum(sol_weights), f1, f2)
 
         return solutions    
-    
-    def plot_front(self, solutions, random_sample=None):
-        random_points = []
 
-        if random_sample is not None:
-            for _ in range(random_sample):  
-                sol_weights = np.random.rand(len(self.expected_returns))
-                sol_weights /= np.sum(sol_weights)
-                f1 = sum(sol_weights * self.expected_returns)
-                f2 = sol_weights.T @ self.risks @ sol_weights
+    def _generate_uniform_weights(self, n=20, step=0.2):
+        results = []
 
-                random_points.append((f1, f2))
+        def backtrack(index, remaining, current):
+            """Backtracking to generate valid weight combinations."""
+            if index == n - 1:
+                current.append(remaining)
+                results.append(tuple(current))
+                current.pop()
+                return
+            for w in np.arange(0, min(remaining, 1) + step, step):
+                current.append(w)
+                backtrack(index + 1, round(remaining - w, 10), current)
+                current.pop()
+
+        backtrack(0, 1.0, [])
+        return results
+
+    def plot_front(self, solutions, n=20, step=0.2):
+        random_points = []        
+        
+        results = self._generate_uniform_weights(n, step)
+        for res in results:  
+            sol_weights = np.array(res)
+            sol_weights /= np.sum(sol_weights)
+            f1 = sum(sol_weights * self.expected_returns)
+            f2 = sol_weights.T @ self.risks @ sol_weights
+
+            random_points.append((f1, f2))
+
 
         plt.figure(figsize=(10, 9))
-        plt.scatter([x[0] for x in random_points], [x[1] for x in random_points], color="blue")
-        plt.scatter([x[0] for x in solutions], [x[1] for x in solutions], color="red")
+        plt.scatter([x[0] for x in random_points], [x[1] for x in random_points], alpha=0.8)
+        plt.scatter([x[0] for x in solutions], [x[1] for x in solutions], color="red", linewidths=3)
 
         plt.xlabel("Expected Return")
         plt.ylabel("Risk")
@@ -379,11 +399,11 @@ class Solver():
         plt.grid(True)
         plt.show()
 
-    def plot_sampled_decision_variables(self, n=500):
-        random_points = []
-
-        for _ in range(n):  
-            sol_weights = np.random.rand(len(self.expected_returns))
+    def plot_sampled_decision_variables(self, n=20, step=0.2):
+        random_points = []        
+        results = self._generate_uniform_weights(n, step)
+        for res in results:  
+            sol_weights = np.array(res)
             sol_weights /= np.sum(sol_weights)
             f1 = sum(sol_weights * self.expected_returns)
             f2 = sol_weights.T @ self.risks @ sol_weights
