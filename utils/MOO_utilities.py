@@ -12,6 +12,9 @@ from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from cvxopt import matrix, solvers
 import xgboost as xgb
+import torch
+import torch.nn as nn
+import torchdiffeq
 
 ORDER = ["SuperFuture", "Apples", "WorldNow", "Electronics123", "Photons", "SpaceNow", "PearPear",
          "PositiveCorrelation", "BetterTechnology", "ABCDE", "EnviroLike", "Moneymakers", "Fuel4",
@@ -33,6 +36,30 @@ def flat_append(lst1, lst2):
         result.append(val)
     return result
 
+class ODEFunc(nn.Module):
+    def __init__(self, hidden_dim):
+        super(ODEFunc, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, 50),
+            nn.Tanh(),
+            nn.Linear(50, hidden_dim)
+        )
+
+    def forward(self, t, y):
+        return self.net(y)
+
+class NODETimeSeries(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super(NODETimeSeries, self).__init__()
+        self.encoder = nn.Linear(input_dim, hidden_dim)
+        self.odefunc = ODEFunc(hidden_dim)
+        self.ode_solver = torchdiffeq.odeint
+        self.decoder = nn.Linear(hidden_dim, input_dim)
+
+    def forward(self, x, t):
+        h0 = self.encoder(x)
+        hT = self.ode_solver(self.odefunc, h0, t)
+        return self.decoder(hT)
 
 class DataReader():
     def __init__(self, dir_path):
@@ -256,9 +283,41 @@ class RegressionModelsCombined():
             predictions[company_name] = (X_future.flatten(), company_preds.copy())
         return predictions
                 
-
-    def train_NODE():
-        pass
+    def train_NODE(self, hidden_dim=10, num_epochs=2000, lr=0.01):
+        self.models = {}
+        self.loss_fn = nn.MSELoss()
+        self.optimizers = {}
+        
+        for company_name in self.data.keys():
+            t = torch.linspace(0, 1, steps=len(self.data[company_name]))
+            x = torch.tensor(self.data[company_name], dtype=torch.float32).unsqueeze(1)
+            
+            model = NODETimeSeries(input_dim=1, hidden_dim=hidden_dim)
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            
+            for epoch in range(num_epochs):
+                optimizer.zero_grad()
+                x_pred = model(x[0], t)
+                loss = self.loss_fn(x_pred.squeeze(), x.squeeze())
+                loss.backward()
+                optimizer.step()
+                
+                if epoch % 500 == 0:
+                    print(f'Company: {company_name}, Epoch {epoch}, Loss: {loss.item()}')
+            
+            self.models[company_name] = model
+            self.optimizers[company_name] = optimizer
+    
+    def predict_NODE(self, num_predictions=100):
+        predictions = {}
+        t_future = torch.linspace(1, 1 + num_predictions / len(self.data[list(self.data.keys())[0]]), steps=num_predictions)
+        
+        for company_name, model in self.models.items():
+            with torch.no_grad():
+                x_future = model(torch.tensor(self.data[company_name][-1], dtype=torch.float32).unsqueeze(0), t_future)
+            predictions[company_name] = (np.arange(self.data_size + 1, self.data_size + num_predictions + 1), x_future.squeeze().numpy())
+        
+        return predictions
     
     def get_covariance_matrix(self, data_window=1.0):
         arr = np.array([(a:=self.data[k])[int((1-data_window)*len(a)):] for k in ORDER])
