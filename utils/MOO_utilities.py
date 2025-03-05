@@ -349,12 +349,32 @@ class Solver():
         self.predicted_prices = np.array([x[-1] for x in [self.predicted_vals[y][1] for y in ORDER]])
         self.expected_returns = self.predicted_prices/self.current_prices - 1
 
-    def solve(self, w1, w2):
+        self.deltaf1 = 1
+        self.deltaf2 = 1
+
+        # Calculate the normalization parameters
+        sol1 = self._solve_wsm(1.0, 0.0)
+        sol2 = self._solve_wsm(0.0, 1.0)
+        f11, f12 = self.get_objective_values(np.array(sol1["x"]).reshape(-1))
+        f21, f22 = self.get_objective_values(np.array(sol2["x"]).reshape(-1))
+        self.minf1 = min(f11, f21)
+        self.minf2 = min(f12, f22)
+        self.maxf1 = max(f11, f21)
+        self.maxf2 = max(f12, f22)
+
+        self.deltaf1 = self.maxf1 - self.minf1
+        self.deltaf2 = self.maxf2 - self.minf2
+
+    def _solve_wsm(self, w1, w2):
         n = len(self.expected_returns)
 
-        # Transpose because of library and *2 because of the formula TODO verify
-        Q = 2 * w1 * matrix(self.risks.T)
-        c = -w2 * matrix(self.expected_returns)
+        # Transpose because of library and *2 because of the formula and normalize TODO verify
+        Q = 2 * w1 * matrix(self.risks.T) / self.deltaf1
+        c = -w2 * matrix(self.expected_returns) / self.deltaf2
+        # Q = 2 * w1 * matrix(self.risks.T)
+        # c = -w2 * matrix(self.expected_returns)
+
+        # print(self.deltaf1, self.deltaf2)
 
         # Constraints: Sum of weights = 1
         A = matrix(np.ones((1, n)))
@@ -368,24 +388,68 @@ class Solver():
 
         return sol
     
-    def solve_wsm(self, step=0.1):
+    def solve_wsm(self, step=0.1):        
         weights1 = np.arange(0, 1.00001, step)
         weights2 = np.ones(len(weights1)) - weights1
 
         solutions = []
         for w1, w2 in zip(weights1, weights2):
             print(f"Running for w1={w1}, w2={w2}")
-            sol = self.solve(float(w1), float(w2))
+            sol = self._solve_wsm(float(w1), float(w2))
             sol_weights = np.array(sol["x"])
             sol_weights = sol_weights.reshape(-1)
-            sol_weights = sol_weights / np.sum(sol_weights)
-            f1 = sum(sol_weights * self.expected_returns)
-            f2 = sol_weights @ self.risks @ sol_weights.T
+            
+            f1, f2 = self.get_objective_values(sol_weights)
 
             solutions.append((f1, f2, sol_weights))
-        print(sum(sol_weights), f1, f2)
+        # print(sum(sol_weights), f1, f2)
 
         return solutions    
+    
+    def solve_ecm(self, num_thresholds=11):
+        solutions = []
+
+        thresholds = self.minf2 + np.linspace(0.0, 1.0, num_thresholds) * (self.deltaf2)
+
+        for threshold in thresholds:
+            print(f"Running for threshold={threshold}")
+            sol = self._solve_ecm(threshold)
+            sol_weights = np.array(sol["x"])
+            sol_weights = sol_weights.reshape(-1)
+            
+            f1, f2 = self.get_objective_values(sol_weights)
+
+            solutions.append((f1, f2, sol_weights))
+
+        return solutions
+
+    def _solve_ecm(self, return_threshold):
+        n = len(self.expected_returns)
+
+        # Transpose because of library and *2 because of the formula and normalize TODO verify
+        Q = 2 * matrix(self.risks.T)
+        c = matrix(np.zeros(n))
+
+        # A = matrix(np.ones((1, n)), (1, n), 'd')
+        # b = matrix(1.0)
+        
+        A = matrix(np.ones((1, n)))
+        b = matrix(1.0)
+
+        G = matrix(np.vstack((-np.array(self.expected_returns), -np.eye(n), np.eye(n))))
+        h = matrix(np.hstack((-return_threshold, np.zeros(n), np.ones(n))))  
+
+        sol = solvers.qp(Q, c, G, h, A, b)
+
+        return sol
+    
+    def get_objective_values(self, solution_weights):
+        solution_weights = solution_weights / np.sum(solution_weights)
+        f1 = sum(solution_weights * self.expected_returns)
+        f2 = solution_weights @ self.risks @ solution_weights.T
+
+        return f1, f2
+
 
     def _generate_uniform_weights(self, n=20, step=0.2):
         results = []
@@ -394,7 +458,8 @@ class Solver():
             """Backtracking to generate valid weight combinations."""
             if index == n - 1:
                 current.append(remaining)
-                results.append(tuple(current))
+                if np.all(np.array(current) >= 0):
+                    results.append(tuple(current))
                 current.pop()
                 return
             for w in np.arange(0, min(remaining, 1) + step, step):
@@ -404,6 +469,7 @@ class Solver():
 
         backtrack(0, 1.0, [])
         return results
+    
 
     def plot_front(self, solutions, n=20, step=0.2):
         random_points = []        
@@ -411,9 +477,7 @@ class Solver():
         results = self._generate_uniform_weights(n, step)
         for res in results:  
             sol_weights = np.array(res)
-            sol_weights /= np.sum(sol_weights)
-            f1 = sum(sol_weights * self.expected_returns)
-            f2 = sol_weights.T @ self.risks @ sol_weights
+            f1, f2 = self.get_objective_values(sol_weights)
 
             random_points.append((f1, f2))
 
@@ -433,9 +497,7 @@ class Solver():
         results = self._generate_uniform_weights(n, step)
         for res in results:  
             sol_weights = np.array(res)
-            sol_weights /= np.sum(sol_weights)
-            f1 = sum(sol_weights * self.expected_returns)
-            f2 = sol_weights.T @ self.risks @ sol_weights
+            f1, f2 = self.get_objective_values(sol_weights)
 
             random_points.append((f1, f2))
         
