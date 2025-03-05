@@ -6,12 +6,21 @@ import math
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-
+from scipy.optimize import curve_fit
+import pandas as pd
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from cvxopt import matrix, solvers
 
 ORDER = ["SuperFuture", "Apples", "WorldNow", "Electronics123", "Photons", "SpaceNow", "PearPear",
          "PositiveCorrelation", "BetterTechnology", "ABCDE", "EnviroLike", "Moneymakers", "Fuel4",
          "MarsProject", "CPU-XYZ", "RoboticsX", "Lasers", "WaterForce", "SafeAndCare", "BetterTomorrow"]
+
+def sinusoidal_function(x, A1, B1, C1, A2, B2, C2, D):
+    return A1 * np.sin(B1 * x + C1) + A2 * np.sin(B2 * x + C2) + D
+
+def complex_sinusoidal_function(x, a, A1, B1, C1, A2, B2, C2, D):
+    return a * x + A1 * np.sin(B1 * x + C1) + A2 * np.sin(B2 * x + C2) + D
 
 class DataReader():
     def __init__(self, dir_path):
@@ -37,7 +46,7 @@ class DataReader():
     def get_data(self):
         return self.data.copy()
     
-    def plot(self, company_name=None, val_range=None):
+    def plot(self, company_name=None):
         if company_name is None:
             company_name = random.choice(list(self.data.keys()))
 
@@ -54,17 +63,12 @@ class DataReader():
         plt.xlabel("Timestep")
         plt.ylabel("Value")
         plt.title(company_name)
-
-        if val_range is None:
-            plt.xticks([0, 101, 201, 301, 401], labels=["T=-1", "T=0", "T=+1", "T=+2", "T=+3"]) 
-        else:
-            plt.xlim([0, val_range])
-            plt.xticks([0, 101, 201, 301, 401], labels=["T=-1", "T=0", "T=+1", "T=+2", "T=+3"]) 
+        plt.xticks([0, 101, 201, 301, 401], labels=["T=-1", "T=0", "T=+1", "T=+2", "T=+3"]) 
 
         plt.grid(True)
         plt.show()
 
-    def plot_all(self, val_range=None, figsize=(15, 5), normalized_y=False):
+    def plot_all(self, figsize=(15, 5), normalized_y=False):
         company_names = list(self.data.keys())
         num_companies = len(company_names)
         cols = 4
@@ -89,13 +93,7 @@ class DataReader():
             axes[i].set_xlabel("Timestep")
             axes[i].set_ylabel("Value")
             axes[i].grid(True)
-            
-            if val_range is None:
-                axes[i].set_xlim([0, 101])
-                axes[i].set_xticks([0, 101, 201, 301, 401], labels=["T=-1", "T=0", "T=+1", "T=+2", "T=+3"])
-            else:
-                axes[i].set_xlim([0, val_range])
-                axes[i].set_xticks([0, 101, 201, 301, 401], labels=["T=-1", "T=0", "T=+1", "T=+2", "T=+3"])  
+            axes[i].set_xticks([0, 101, 201, 301, 401], labels=["T=-1", "T=0", "T=+1", "T=+2", "T=+3"]) 
             
             if normalized_y:
                 axes[i].set_ylim([y_min, y_max])
@@ -107,7 +105,7 @@ class DataReader():
         plt.show()
 
 class RegressionModelsCombined():
-    def __init__(self, data, window_size=10, test_size = 0.2):
+    def __init__(self, data, window_size=10, test_size=0.2):
         self.data = data
         self.data_size = len(data[list(data.keys())[0]])
         self.window_size = window_size
@@ -148,10 +146,8 @@ class RegressionModelsCombined():
             self.y_train[company_name] = np.array(company_y[:int(len(company_y)*(1-self.test_size))].copy(), dtype=np.float32)
             self.y_test[company_name] = np.array(company_y[int(len(company_y)*(1-self.test_size)):].copy(), dtype=np.float32)
     
-
     def train_linear(self):
         self.y_preds = {}
-
         for company_name in self.data.keys():
             model = LinearRegression()
             model.fit(self.X, self.y[company_name])
@@ -159,38 +155,76 @@ class RegressionModelsCombined():
 
     def predict_linear(self, num_predictions=100):
         predictions = {}
-
         X_future = np.arange(self.data_size+1, self.data_size+num_predictions+1).reshape(-1, 1)
-
         for asset, model in self.models.items():
             y_future = model.predict(X_future)
             predictions[asset] = (X_future.flatten(), y_future)
-
         return predictions
 
-    def train_linear_partial_windows(self):
-        self.y_preds_train = {}
-        self.y_preds_test = {}
+    def train_sinusoidal(self): #I am sinusoidal, I am gonna curve myself
+        self.y_preds = {}
         for company_name in self.data.keys():
-            model = LinearRegression()
-            model.fit(self.X_train[company_name], self.y_train[company_name])
-            self.models[company_name] = model
-            self.y_preds_train[company_name] = self.models[company_name].predict(self.X_train[company_name])
-            self.y_preds_test[company_name] = self.models[company_name].predict(self.X_test[company_name])
+            y = self.data[company_name]
+            p0 = [3, 1, 0, 2, 2, 0, np.mean(y)]
+            X = np.squeeze(self.X)
+            X_scaled = (X - np.min(X)) / (np.max(X) - np.min(X)) * (2 * np.pi)
+            params, _ = curve_fit(sinusoidal_function, X_scaled, y, p0=p0, maxfev=500000)
+            self.models[company_name] = params
+            self.y_preds[company_name] = sinusoidal_function(np.squeeze(X_scaled), *params)
 
-    def train_linear_full_windows(self):
-        self.y_preds_full = {}
+    def predict_sinusoidal(self, num_predictions=100):
+        predictions = {}
+        X_future = np.arange(self.data_size + 1, self.data_size + num_predictions + 1)
+        X_future_scaled = (X_future - np.min(self.X)) / (np.max(self.X) - np.min(self.X)) * (2 * np.pi)
+        for asset, params in self.models.items():
+            y_future = sinusoidal_function(X_future_scaled, *params)
+            predictions[asset] = (X_future, y_future)
+        return predictions
+    
+    def train_complex_sinusoidal(self):
+        self.y_preds = {}
         for company_name in self.data.keys():
-            model = LinearRegression()
-            model.fit(self.X[company_name], self.y[company_name])
-            self.models[company_name] = model
-            self.y_preds_full[company_name] = self.models[company_name].predict(self.X[company_name])
+            y = self.data[company_name]
+            p0 = [1, 3, 1, 0, 2, 2, 0, np.mean(y)]
+            X = np.squeeze(self.X)
+            X_scaled = (X - np.min(X)) / (np.max(X) - np.min(X)) * (2 * np.pi)
+            params, _ = curve_fit(complex_sinusoidal_function, X_scaled, y, p0=p0, maxfev=500000)
+            self.models[company_name] = params
+            self.y_preds[company_name] = complex_sinusoidal_function(np.squeeze(X_scaled), *params)
 
-    def train_sinusoidal():
-        pass
+    def predict_complex_sinusoidal(self, num_predictions=100):
+        predictions = {}
+        X_future = np.arange(self.data_size + 1, self.data_size + num_predictions + 1)
+        X_future_scaled = (X_future - np.min(self.X)) / (np.max(self.X) - np.min(self.X)) * (2 * np.pi)
+        for asset, params in self.models.items():
+            y_future = complex_sinusoidal_function(X_future_scaled, *params)
+            predictions[asset] = (X_future, y_future)
+        return predictions
+    
+    def plot_arima_lags(self, max_lags=20):
+        for company_name in self.data.keys():
+            y = self.data[company_name]
+            print(f"Lags for company = {company_name}")
+            plot_acf(y, lags=max_lags)
+            plot_pacf(y, lags=max_lags)
+            plt.show()
 
-    def train_ARIMA():
-        pass
+    def train_arima(self, p, d, q):
+        self.models = {}
+        self.y_preds = {}
+        for company_name in self.data.keys():
+            y = self.data[company_name]
+            model = ARIMA(y, order=(p, d, q))
+            fitted_model = model.fit()
+            self.models[company_name] = fitted_model
+
+    def predict_arima(self, num_predictions=100):
+        predictions = {}
+        X_future = np.arange(self.data_size + 1, self.data_size + num_predictions + 1).reshape(-1, 1)
+        for company_name, model in self.models.items():
+            forecast = model.forecast(steps=num_predictions)
+            predictions[company_name] = (X_future.flatten(), forecast)
+        return predictions
     
     def train_XGBOOST():
         pass
@@ -201,9 +235,7 @@ class RegressionModelsCombined():
     def get_covariance_matrix(self, data_window=1.0):
         arr = np.array([(a:=self.data[k])[int((1-data_window)*len(a)):] for k in ORDER])
         covariance_mat = np.cov(arr)
-        
         return covariance_mat
-
 
     def plot_predictions(self, predictions, val_range=None, figsize=(15, 5)):
         if self.models is None:
@@ -282,9 +314,6 @@ class RegressionModelsCombined():
 
         plt.tight_layout()
         plt.show()
-
-    def plot_all_preds(self):
-        pass
 
     def get_metrics(self, full=True):
         if self.models is None:
