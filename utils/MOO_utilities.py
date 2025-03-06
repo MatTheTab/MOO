@@ -20,6 +20,8 @@ ORDER = ["SuperFuture", "Apples", "WorldNow", "Electronics123", "Photons", "Spac
          "PositiveCorrelation", "BetterTechnology", "ABCDE", "EnviroLike", "Moneymakers", "Fuel4",
          "MarsProject", "CPU-XYZ", "RoboticsX", "Lasers", "WaterForce", "SafeAndCare", "BetterTomorrow"]
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
 def sinusoidal_function(x, A1, B1, C1, A2, B2, C2, D):
     return A1 * np.sin(B1 * x + C1) + A2 * np.sin(B2 * x + C2) + D
 
@@ -283,7 +285,8 @@ class RegressionModelsCombined():
             predictions[company_name] = (X_future.flatten(), company_preds.copy())
         return predictions
                 
-    def train_NODE(self, hidden_dim=10, num_epochs=2000, lr=0.01):
+    def train_NODE(self, hidden_dim=10, num_epochs=300, lr=0.01):
+        print(f"Using device: {device}")
         self.models = {}
         self.loss_fn = nn.MSELoss()
         self.optimizers = {}
@@ -293,19 +296,20 @@ class RegressionModelsCombined():
             x = torch.tensor(self.data[company_name], dtype=torch.float32).unsqueeze(1)
             
             model = NODETimeSeries(input_dim=1, hidden_dim=hidden_dim)
+            model = model.to(device)
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
             
             for epoch in range(num_epochs):
                 optimizer.zero_grad()
-                x_pred = model(x[0], t)
+                x_pred = model(x[0].to(device), t.to(device))
                 loss = self.loss_fn(x_pred.squeeze(), x.squeeze())
                 loss.backward()
                 optimizer.step()
                 
-                if epoch % 500 == 0:
+                if epoch % 100 == 0:
                     print(f'Company: {company_name}, Epoch {epoch}, Loss: {loss.item()}')
             
-            self.models[company_name] = model
+            self.models[company_name] = model.to("cpu")
             self.optimizers[company_name] = optimizer
     
     def predict_NODE(self, num_predictions=100):
