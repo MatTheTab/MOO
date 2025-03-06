@@ -433,7 +433,7 @@ class Solver():
     def solve_ecm(self, num_thresholds=11):
         solutions = []
 
-        thresholds = self.minf2 + np.linspace(0.0, 1.0, num_thresholds) * (self.deltaf2)
+        thresholds = self.minf1 + np.linspace(0.0, 1.0, num_thresholds) * (self.deltaf1)
 
         for threshold in thresholds:
             print(f"Running for threshold={threshold}")
@@ -453,9 +453,6 @@ class Solver():
         # Transpose because of library and *2 because of the formula and normalize TODO verify
         Q = 2 * matrix(self.risks.T)
         c = matrix(np.zeros(n))
-
-        # A = matrix(np.ones((1, n)), (1, n), 'd')
-        # b = matrix(1.0)
         
         A = matrix(np.ones((1, n)))
         b = matrix(1.0)
