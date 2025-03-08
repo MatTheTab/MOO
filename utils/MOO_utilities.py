@@ -15,12 +15,32 @@ import xgboost as xgb
 import torch
 import torch.nn as nn
 import torchdiffeq
+import seaborn as sns
 
 ORDER = ["SuperFuture", "Apples", "WorldNow", "Electronics123", "Photons", "SpaceNow", "PearPear",
          "PositiveCorrelation", "BetterTechnology", "ABCDE", "EnviroLike", "Moneymakers", "Fuel4",
          "MarsProject", "CPU-XYZ", "RoboticsX", "Lasers", "WaterForce", "SafeAndCare", "BetterTomorrow"]
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def pretty_display(solutions):
+    data = []
+    
+    for sol in solutions:
+        expected_return, risk, weights = sol
+        row = {"Expected Gain": expected_return, "Risk": risk}
+        row.update({company: weight for company, weight in zip(ORDER, weights)})
+        row["Sanity Check"] = sum(weights)
+        data.append(row)
+    
+    df = pd.DataFrame(data)
+    return df
+
+def save_txt(solution, filename):
+    with open(filename, 'w') as f:
+        expected_return, risk, weights = solution
+        line = f"{expected_return:.2f} {risk:.2f} " + " ".join(f"{w:.2f}" for w in weights)
+        f.write(line)
 
 def sinusoidal_function(x, A1, B1, C1, A2, B2, C2, D):
     return A1 * np.sin(B1 * x + C1) + A2 * np.sin(B2 * x + C2) + D
@@ -506,7 +526,6 @@ class Solver():
 
             random_points.append((f1, f2))
 
-
         plt.figure(figsize=(10, 9))
         plt.scatter([x[0] for x in random_points], [x[1] for x in random_points], alpha=0.8)
         plt.scatter([x[0] for x in solutions], [x[1] for x in solutions], color="red", linewidths=3)
@@ -534,78 +553,115 @@ class Solver():
         plt.title("Sampled Decision Variables")
         plt.grid(True)
         plt.show()
-    
 
-    # def plot_predictions(self, company_name=None):
-    #     if company_name is None:
-    #         company_name = random.choice(list(self.data.keys()))
+class ExperimentRunner:
+    def __init__(self, solver):
+        self.solver = solver
+        self.results_WSM = None
+        self.results_ECM = None
 
-    #     if company_name not in self.data or company_name not in self.predicted_vals:
-    #         print(f"Company '{company_name}' not found in data or predictions.")
-    #         return
-        
-    #     actual_values = self.data[company_name]
-    #     predicted_values = self.predicted_vals[company_name][1]
-    #     actual_timesteps = list(range(len(actual_values)))
-    #     predicted_timesteps = list(range(len(actual_values), len(actual_values) + len(predicted_values)))
-        
-    #     plt.figure(figsize=(10, 5))
-    #     plt.plot(actual_timesteps, actual_values, linestyle='-', markersize=3, label='Actual', color='blue')
-    #     plt.plot(predicted_timesteps, predicted_values, linestyle='--', markersize=3, label='Predicted', color='red')
-        
-    #     plt.xlabel("Timestep")
-    #     plt.ylabel("Value")
-    #     plt.title(f"Actual vs Predicted - {company_name}")
-    #     plt.legend()
-    #     plt.grid(True)
-    #     plt.show()
+    def run_WSM(self, steps):
+        all_results = []
+        for step in steps:
+            solutions = self.solver.solve_wsm(step=step)
+            solutions_df = pretty_display(solutions)
+            all_results.append(solutions_df)
+        self.results_WSM = pd.concat(all_results, ignore_index=True)
 
-    # def plot_all_predictions(self, val_range=None, figsize=(15, 5), normalized_y=False):
-    #     company_names = list(self.data.keys())
-    #     num_companies = len(company_names)
-    #     cols = 4
-    #     rows = math.ceil(num_companies / cols)
+    def run_ECM(self, thresholds):
+        all_results = []
+        for num_threshold in thresholds:
+            solutions = self.solver.solve_ecm(num_thresholds=num_threshold)
+            solutions_df = pretty_display(solutions)
+            all_results.append(solutions_df)
+        self.results_ECM = pd.concat(all_results, ignore_index=True)
+
+    def summarize(self):
+        def get_top_solutions(df, method_name):
+            if df is None:
+               return pd.DataFrame(columns=["Method", "Solution Signature", "Frequency"])
         
-    #     fig, axes = plt.subplots(rows, cols, figsize=figsize)
-    #     axes = axes.flatten()
+            df_no_risk_gain = df.drop(columns=["Expected Gain", "Risk", "Sanity Check"])
+            df["Solution Signature"] = df_no_risk_gain.apply(tuple, axis=1)
+            top_solutions = df["Solution Signature"].value_counts().head(10).reset_index()
+            top_solutions.columns = ["Solution Signature", "Frequency"]
+            top_solutions["Method"] = method_name
+            return top_solutions
         
-    #     if normalized_y:
-    #         all_values = [value for values in self.data.values() for value in values]
-    #         all_predictions = [value for values in self.predicted_vals.values() for value in values]
-    #         y_min, y_max = min(all_values + all_predictions), max(all_values + all_predictions)
-    #         margin = (y_max - y_min) * 0.1
-    #         y_min -= margin
-    #         y_max += margin
-        
-    #     for i, company_name in enumerate(company_names):
-    #         if company_name not in self.predicted_vals:
-    #             continue
+        top_wsm = get_top_solutions(self.results_WSM, "WSM")
+        top_ecm = get_top_solutions(self.results_ECM, "ECM")
+        return top_ecm, top_wsm
+
+    def plot_results(self):
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+        def plot_histogram(ax, df, title):
+            if df is None:
+                ax.set_title(f"{title} - No Data")
+                return
             
-    #         actual_values = self.data[company_name]
-    #         predicted_values = self.predicted_vals[company_name]
-    #         actual_timesteps = list(range(len(actual_values)))
-    #         predicted_timesteps = list(range(len(actual_values), len(actual_values) + len(predicted_values)))
+            solution_counts = df.drop(columns=["Expected Gain", "Risk", "Sanity Check"]).apply(tuple, axis=1).value_counts()
+            sns.histplot(solution_counts, bins=30, kde=True, ax=ax)
+            ax.set_title(f"{title} - Solution Occurrences")
+            ax.set_xlabel("Occurrences")
+            ax.set_ylabel("Frequency")
+
+        plot_histogram(axes[0], self.results_WSM, "WSM")
+        plot_histogram(axes[1], self.results_ECM, "ECM")
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_risk_return_distribution(self):
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+
+        def plot_scatter_and_distributions(df, title, row_idx):
+            if df is None:
+                for col in range(3):
+                    axes[row_idx, col].set_title(f"{title} - No Data")
+                return
             
-    #         axes[i].plot(actual_timesteps, actual_values, linestyle='-', markersize=3, label='Actual', color='blue')
-    #         axes[i].plot(predicted_timesteps, predicted_values, linestyle='--', markersize=3, label='Predicted', color='red')
-    #         axes[i].set_title(company_name)
-    #         axes[i].set_xlabel("Timestep")
-    #         axes[i].set_ylabel("Value")
-    #         axes[i].grid(True)
+            sns.scatterplot(x=df["Expected Gain"], y=df["Risk"], ax=axes[row_idx, 0])
+            axes[row_idx, 0].set_title(f"{title} - Risk vs Return")
+            axes[row_idx, 0].set_xlabel("Expected Gain")
+            axes[row_idx, 0].set_ylabel("Risk")
+
+            sns.histplot(df["Risk"], kde=True, bins=30, ax=axes[row_idx, 1])
+            axes[row_idx, 1].set_title(f"{title} - Risk Distribution")
+            axes[row_idx, 1].set_xlabel("Risk")
+
+            sns.histplot(df["Expected Gain"], kde=True, bins=30, ax=axes[row_idx, 2])
+            axes[row_idx, 2].set_title(f"{title} - Expected Gain Distribution")
+            axes[row_idx, 2].set_xlabel("Expected Gain")
+
+        plot_scatter_and_distributions(self.results_WSM, "WSM", 0)
+        plot_scatter_and_distributions(self.results_ECM, "ECM", 1)
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_top_corporations(self):
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        def plot_bar_chart(ax, df, title):
+            if df is None or df.empty:
+                ax.set_title(f"{title} - No Data")
+                return
+
+            # Drop non-corporation columns (ensure the remaining ones are numeric)
+            corp_columns = [col for col in df.columns if col not in ["Expected Gain", "Risk", "Sanity Check"]]
+            corp_df = df[corp_columns].apply(pd.to_numeric, errors="coerce")  # Ensure numeric values
             
-    #         if val_range is None:
-    #             axes[i].set_xticks(range(0, len(actual_values) + len(predicted_values), 10))
-    #         else:
-    #             axes[i].set_xlim([0, val_range])
-    #             axes[i].set_xticks(range(0, val_range, 10))
-            
-    #         if normalized_y:
-    #             axes[i].set_ylim([y_min, y_max])
-            
-    #         axes[i].legend()
-        
-    #     for j in range(i + 1, len(axes)):
-    #         fig.delaxes(axes[j])
-        
-    #     plt.tight_layout()
-    #     plt.show()
+            total_investment = corp_df.sum(axis=0).sort_values(ascending=False)
+
+            sns.barplot(x=total_investment.values, y=total_investment.index, ax=ax)
+            ax.set_title(f"{title} - Total Investment per Corporation")
+            ax.set_xlabel("Total Investment")
+            ax.set_ylabel("Corporation")
+
+        plot_bar_chart(axes[0], self.results_WSM, "WSM")
+        plot_bar_chart(axes[1], self.results_ECM, "ECM")
+
+        plt.tight_layout()
+        plt.show()
+
