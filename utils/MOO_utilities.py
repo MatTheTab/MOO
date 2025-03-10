@@ -536,6 +536,37 @@ class Solver():
         plt.grid(True)
         plt.show()
 
+    def plot_multiple_fronts(self, solutions_list, titles, n=20, step=0.2):
+        if len(solutions_list) != 6 or len(titles) != 6:
+            raise ValueError("You must provide exactly 6 solutions lists and 6 titles.")
+        
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        axes = axes.flatten()
+        
+        for i, (solutions, ax) in enumerate(zip(solutions_list, axes)):
+            random_points = []        
+            results = self._generate_uniform_weights(n, step)
+            
+            for res in results:  
+                sol_weights = np.array(res)
+                f1, f2 = self.get_objective_values(sol_weights)
+                random_points.append((f1, f2))
+            
+            ax.scatter([x[0] for x in random_points], [x[1] for x in random_points], alpha=0.8)
+            
+            if i < 3:
+                ax.scatter([x[0] for x in solutions], [x[1] for x in solutions], color="blue", linewidths=3)
+            else:
+                ax.scatter([x[0] for x in solutions], [x[1] for x in solutions], color="red", linewidths=3)
+            
+            ax.set_xlabel("Expected Return")
+            ax.set_ylabel("Risk")
+            ax.set_title(titles[i])
+            ax.grid(True)
+        
+        plt.tight_layout()
+        plt.show()
+
     def plot_sampled_decision_variables(self, n=20, step=0.2):
         random_points = []        
         results = self._generate_uniform_weights(n, step)
