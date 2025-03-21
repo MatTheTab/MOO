@@ -322,7 +322,7 @@ class RegressionModelsCombined():
             for epoch in range(num_epochs):
                 optimizer.zero_grad()
                 x_pred = model(x[0].to(device), t.to(device))
-                loss = self.loss_fn(x_pred.squeeze(), x.squeeze())
+                loss = self.loss_fn(x_pred.squeeze(), x.to(device).squeeze())
                 loss.backward()
                 optimizer.step()
                 
@@ -386,6 +386,52 @@ class RegressionModelsCombined():
 
         plt.tight_layout()
         plt.show()
+
+    def plot_multiple_predictions(self, predictions_list, titles, val_range=None, figsize=(15, 5)):
+        if len(predictions_list) != len(titles):
+            raise ValueError("The number of predictions lists must match the number of titles.")
+
+
+        company_names = list(self.data.keys())
+        num_companies = len(company_names)
+        cols = 4
+        rows = math.ceil(num_companies / cols)
+
+        fig, axes = plt.subplots(rows, cols, figsize=figsize)
+        axes = axes.flatten()
+
+        for i, company_name in enumerate(company_names):
+            values = self.data[company_name]
+            timesteps = list(range(len(values)))
+
+            axes[i].plot(timesteps, values, linestyle='-', markersize=3, color='blue', label='Actual Values')
+
+            for j, (predictions, title) in enumerate(zip(predictions_list, titles)):
+                if j == 0:
+                    axes[i].plot(predictions[company_name][0], predictions[company_name][1], linestyle='-', markersize=3, label=title, color="red")
+                else:
+                    axes[i].plot(predictions[company_name][0], predictions[company_name][1], linestyle='--', markersize=3, label=title)
+
+                
+            axes[i].set_title(company_name)
+            axes[i].set_xlabel("Timestep")
+            axes[i].set_ylabel("Value")
+            axes[i].grid(True)
+            axes[i].legend()
+            
+            if val_range is None:
+                axes[i].set_xlim([0, 101])
+                axes[i].set_xticks([0, 101, 201, 301, 401], labels=["T=-1", "T=0", "T=+1", "T=+2", "T=+3"])
+            else:
+                axes[i].set_xlim([0, val_range])
+                axes[i].set_xticks([0, 101, 201, 301, 401], labels=["T=-1", "T=0", "T=+1", "T=+2", "T=+3"])  
+            
+        for j in range(i + 1, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout()
+        plt.show()
+
 
 class Solver():
     def __init__(self, data, predicted_vals, risks):
