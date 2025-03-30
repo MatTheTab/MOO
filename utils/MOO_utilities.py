@@ -16,6 +16,11 @@ import torch
 import torch.nn as nn
 import torchdiffeq
 import seaborn as sns
+from pymoo.indicators.hv import HV
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.cm as cm
+import plotly.graph_objects as go
+from scipy.stats import qmc
 
 ORDER = ["SuperFuture", "Apples", "WorldNow", "Electronics123", "Photons", "SpaceNow", "PearPear",
          "PositiveCorrelation", "BetterTechnology", "ABCDE", "EnviroLike", "Moneymakers", "Fuel4",
@@ -739,6 +744,599 @@ class ExperimentRunner:
         plot_bar_chart(axes[0], self.results_WSM, "WSM")
         plot_bar_chart(axes[1], self.results_ECM, "ECM")
 
+        plt.tight_layout()
+        plt.show()
+
+
+def bimodal_sample(size=1):
+    means = [0.2, 0.8]
+    std_devs = [0.1, 0.1]
+    choices = np.random.choice([0, 1], size=size)
+    samples = np.random.normal(loc=np.array(means)[choices], scale=np.array(std_devs)[choices])
+    return np.clip(samples, 0, 1)
+
+def transform_solution(solution):
+    new_sol = []
+    for example in solution:
+        temp = []
+        temp.append(example[0])
+        temp.append(example[1])
+        for val in example[-1]:
+            temp.append(val)
+        new_sol.append(temp.copy())
+    return np.array(new_sol, dtype=np.float32)
+
+def calculate_3d_hypervolume(population, ref_point=np.array([1.1, 1.1])):
+    hv_value = HV(ref_point = ref_point)(population)
+    return hv_value
+
+def find_non_dominated(F):
+    M = np.zeros((F.shape[0], F.shape[0]))
+    for i in range(F.shape[0]):
+        for j in range(F.shape[0]):
+            if np.all(F[i] <= F[j]) and not np.all(F[i] == F[j]):
+                M[i, j] = 1
+            elif np.all(F[j] <= F[i]) and not np.all(F[j] == F[i]):
+                M[i, j] = -1
+    I = np.where(np.all(M >= 0, axis=1))[0]
+    return I
+
+def calculate_2d_hyperarea(population, ref_point=np.array([1.1, 1.1])):
+    hv_value = HV(ref_point = ref_point)(population)
+    return hv_value
+
+def find_non_dominated(F, _F=None):
+    M = np.zeros((F.shape[0],F.shape[0]))
+    for i in range(F.shape[0]):
+      for j in range(F.shape[0]):
+        if np.all(F[i]<=F[j]) and not np.all(F[i]==F[j]):
+          M[i,j] = 1
+        elif np.all(F[j]<=F[i]) and not np.all(F[j]==F[i]):
+          M[i,j] = -1
+    I = np.where(np.all(M >= 0, axis=1))[0]
+    return I
+
+class GeneticSolver(Solver):
+    def __init__(self, data, predicted_vals, risks, population_size, mutation_probability, weight_size=20, num_dimensions=2):
+        super().__init__(data, predicted_vals, risks)
+        self.population_size = population_size  
+        self.weight_size = weight_size
+        self.log_history = False
+        self.num_dimensions = num_dimensions
+        self.mutation_prob = mutation_probability
+
+    def enable_loging(self):
+        self.log_history = True
+    
+    def disable_loging(self):
+        self.log_history = False
+
+    def normalize(self, population):
+        return population / population.sum(axis=1, keepdims=True)
+    
+    def normalize_population_values(self, population, num_dims=2):
+        values = []
+        for weights in population:
+            if num_dims == 3:
+                potential_gain = self.maxf1 - (weights.T @ self.expected_returns)
+                risk = weights.T @ self.risks @ weights
+                potential_gain = (potential_gain - self.minf1)/(self.maxf1 - self.minf1)
+                num_zero_weights = np.sum(weights < 0.01)/self.weight_size
+                risk = (risk - self.minf2)/(self.maxf2 - self.minf2)
+                temp = [potential_gain, risk, num_zero_weights]
+            else:
+                potential_gain = self.maxf1 - (weights.T @ self.expected_returns)
+                risk = weights.T @ self.risks @ weights
+                potential_gain = (potential_gain - self.minf1)/(self.maxf1 - self.minf1)
+                risk = (risk - self.minf2)/(self.maxf2 - self.minf2)
+                temp = [potential_gain, risk]
+            values.append(temp.copy())
+        return np.array(values, dtype=np.float32)
+
+    def generate_population(self):
+        alpha = np.ones(self.weight_size)
+        population = np.array([np.random.dirichlet(alpha) for _ in range(self.population_size)], dtype=np.float32)
+        if self.log_history:
+            self.population_history = []
+            self.population_history.append(population.copy())
+            
+        return population
+    
+    def initialize_chebyshev(self):
+        if self.num_dimensions <= 1:
+            print("At least two dimensions must be present")
+            raise ValueError
+        elif self.num_dimensions == 2:
+            samples_dim_1 = np.linspace(0, 1, self.population_size)
+            samples_dim_2 = 1 - samples_dim_1
+            weights = []
+            for i in range(len(samples_dim_1)):
+                weights.append([samples_dim_1[i], samples_dim_2[i]])
+            weights = np.array(weights, dtype=np.float32)
+        else:
+            weights = np.random.dirichlet(np.ones(self.num_dimensions), self.population_size).astype(np.float32)
+        return weights
+    
+
+    def crossover(self, chebyshev_weights, neighborhoods, weight_to_individual_map):
+        np.random.shuffle(chebyshev_weights)
+        weight = chebyshev_weights[0]
+        neighboring_weights = neighborhoods[tuple(weight)].copy()
+        random.shuffle(neighboring_weights)
+        weight_parent_1, weight_parent_2 = neighboring_weights[:2]
+        parent_1, parent_2 = weight_to_individual_map[weight_parent_1], weight_to_individual_map[weight_parent_2]
+        alpha = np.random.rand()
+        offspring = alpha * parent_1 + (1 - alpha) * parent_2
+        offspring = offspring / np.sum(offspring)
+        
+        return offspring, weight
+    
+    def mutate(self, individual):
+        if random.random() < self.mutation_prob:
+            idx = random.randint(0, len(individual) - 1)
+            individual[idx] = random.random()
+        return individual/np.sum(individual)
+    
+    def find_neighborhoods(self, chebyshev_weights, neighborhood_size):
+        distances = np.abs(chebyshev_weights[:, None] - chebyshev_weights).sum(axis=-1)
+        neighbors_dict = {}
+        for i, w in enumerate(chebyshev_weights):
+            sorted_indices = np.argsort(distances[i])
+            closest_indices = sorted_indices[1:neighborhood_size+1]
+            neighbors_dict[tuple(w)] = [tuple(chebyshev_weights[j]) for j in closest_indices]
+        return neighbors_dict
+    
+    def assign_chebyshev_weights(self, population, chebyshev_weights):
+        np.random.shuffle(chebyshev_weights)
+        weight_to_individual_map = {tuple(chebyshev_weights[i]): population[i] for i in range(self.population_size)}
+        return weight_to_individual_map
+    
+    def calculate_chebyshev_distance(self, weight, investment_vector):
+        potential_gain = self.maxf1 - (investment_vector.T @ self.expected_returns)
+        #risk = np.sqrt(investment_vector.T @ self.risks @ investment_vector)
+        risk = investment_vector.T @ self.risks @ investment_vector
+        potential_gain = (potential_gain - self.minf1)/(self.maxf1 - self.minf1)
+        risk = (risk - self.minf2)/(self.maxf2 - self.minf2)
+        return max(weight[0]*potential_gain, weight[1]*risk)
+    
+    def calculate_chebyshev_3d_distance(self, weight, investment_vector):
+        potential_gain = self.maxf1 - (investment_vector.T @ self.expected_returns)
+        #risk = np.sqrt(investment_vector.T @ self.risks @ investment_vector)
+        risk = investment_vector.T @ self.risks @ investment_vector
+        potential_gain = (potential_gain - self.minf1)/(self.maxf1 - self.minf1)
+        num_zero_weights = np.sum(investment_vector < 0.01)/self.weight_size
+        risk = (risk - self.minf2)/(self.maxf2 - self.minf2)
+        return max(weight[0]*potential_gain, weight[1]*risk, weight[2] * num_zero_weights)
+    
+    def perform_selection(self, offspring, weight_to_individual_map, origin_weight, neighborhoods):
+        #Spaghetti code, but I do not care as long as it works
+        complete_pool = []
+        for weight in neighborhoods[tuple(origin_weight)]:
+            complete_pool.append(weight_to_individual_map[tuple(weight)])
+        complete_pool.append(offspring)
+        complete_pool = np.array(complete_pool, dtype=np.float32)
+        next_generation = []
+        for weight in neighborhoods[tuple(origin_weight)]:
+            current_best = weight_to_individual_map[tuple(weight)]
+            if self.num_dimensions == 3:
+                chebyshev_distance_current = self.calculate_chebyshev_3d_distance(weight, weight_to_individual_map[tuple(weight)])
+            else:
+                chebyshev_distance_current = self.calculate_chebyshev_distance(weight, weight_to_individual_map[tuple(weight)])
+            if self.num_dimensions == 3:
+                chebyshev_distance_new = self.calculate_chebyshev_3d_distance(weight, offspring)
+            else:
+                chebyshev_distance_new = self.calculate_chebyshev_distance(weight, offspring)
+            if chebyshev_distance_new < chebyshev_distance_current:
+                current_best = offspring
+                chebyshev_distance_current = chebyshev_distance_new
+            weight_to_individual_map[tuple(weight)] = current_best
+        for key in weight_to_individual_map:
+            next_generation.append(weight_to_individual_map[key])
+        return np.array(next_generation, dtype=np.float32), weight_to_individual_map
+
+    def genetic_optimize(self, generations=100, neighborhood_size=2):
+        generations = generations*self.population_size
+        chebyshev_weights = self.initialize_chebyshev()
+        neighborhoods = self.find_neighborhoods(chebyshev_weights, neighborhood_size)
+        population = self.generate_population()
+        weight_to_individual_map = self.assign_chebyshev_weights(population, chebyshev_weights)
+        for generation in range(generations):
+            offspring, origin_weight = self.crossover(chebyshev_weights, neighborhoods, weight_to_individual_map)
+            offspring = self.mutate(offspring)
+            population, weight_to_individual_map = self.perform_selection(offspring, weight_to_individual_map, origin_weight, neighborhoods)
+            if self.log_history:
+                self.population_history.append(self.normalize(population.copy()))
+        return population
+    
+    def get_solutions_from_population(self, population):
+        solutions = []
+        for individual in population:
+            solution = []
+            potential_gain = individual.T @ self.expected_returns
+            #risk = np.sqrt(individual.T @ self.risks @ individual)
+            risk = individual.T @ self.risks @ individual
+            solution.append(potential_gain)
+            solution.append(risk)
+            solution.append(individual.copy())
+            solutions.append(solution.copy())
+        return solutions
+    
+    def get_solutions_from_population_3D(self, population):
+        solutions = []
+        for individual in population:
+            solution = []
+            potential_gain = individual.T @ self.expected_returns
+            #risk = np.sqrt(individual.T @ self.risks @ individual)
+            risk = individual.T @ self.risks @ individual
+            num_zero_weights = np.sum(individual < 0.01)/self.weight_size
+            solution.append(potential_gain)
+            solution.append(risk)
+            solution.append(num_zero_weights)
+            solution.append(individual.copy())
+            solutions.append(solution.copy())
+        return solutions
+
+    def plot_sampled_3D(self, n=20, step=0.2, color=True):
+        random_points = []        
+        results = self._generate_uniform_weights(n, step)
+        
+        for res in results:  
+            sol_weights = np.array(res)
+            f1, f2 = self.get_objective_values(sol_weights)  # Assuming f3 exists
+            f3 = np.sum(sol_weights < 0.01)/self.weight_size
+            random_points.append((f1, f2, f3))
+        
+        if color:
+            plt.figure(figsize=(10, 9))
+            scatter = plt.scatter(
+                [x[0] for x in random_points], 
+                [x[1] for x in random_points], 
+                c=[x[2] for x in random_points],  # Color by f3
+                cmap='viridis', 
+                edgecolors='k'
+            )
+            plt.colorbar(scatter, label='Non-Zero Weights')
+            plt.xlabel("Expected Return")
+            plt.ylabel("Risk")
+            plt.title("Sampled Decision Variables")
+            plt.grid(True)
+            plt.show()
+        else:
+            fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+            
+            axs[0].scatter([x[0] for x in random_points], [x[1] for x in random_points])
+            axs[0].set_xlabel("Expected Gain")
+            axs[0].set_ylabel("Risk")
+            axs[0].set_title("Expected Gain vs Risk")
+            
+            axs[1].scatter([x[1] for x in random_points], [x[2] for x in random_points])
+            axs[1].set_xlabel("Risk")
+            axs[1].set_ylabel("Non-Zero Weights")
+            axs[1].set_title("Risk vs Non-Zero Weights")
+            
+            axs[2].scatter([x[0] for x in random_points], [x[2] for x in random_points])
+            axs[2].set_xlabel("Expected Gain")
+            axs[2].set_ylabel("Non-Zero Weights")
+            axs[2].set_title("Expected Gain vs Non-Zero Weights")
+            
+            for ax in axs:
+                ax.grid(True)
+            
+            plt.tight_layout()
+            plt.show()
+
+    def plot_front_3D(self, solutions, n=20, step=0.2, color=True):
+        random_points = []        
+        results = self._generate_uniform_weights(n, step)
+        
+        for res in results:  
+            sol_weights = np.array(res)
+            f1, f2 = self.get_objective_values(sol_weights)  # Assuming f3 exists
+            f3 = np.sum(sol_weights < 0.01)/self.weight_size
+            random_points.append((f1, f2, f3))
+        
+        if color:
+            plt.figure(figsize=(10, 9))
+            scatter = plt.scatter(
+                [x[0] for x in random_points], 
+                [x[1] for x in random_points], 
+                c=[x[2] for x in random_points],  # Color by f3
+                cmap='viridis', 
+                edgecolors='k',
+                alpha=0.3
+            )
+            plt.colorbar(scatter, label='Non-Zero Weights')
+            
+            solution_colors = [x[2] for x in solutions]  # Color solutions by their f3 values
+            sol_scatter = plt.scatter(
+                [x[0] for x in solutions], 
+                [x[1] for x in solutions], 
+                c=solution_colors, 
+                cmap='coolwarm',  # Different gradient
+                edgecolors='black',
+                linewidths=1.5,
+                label='Front Solutions'
+            )
+            plt.colorbar(sol_scatter, label='Solution Non-Zero Weights')
+            
+            plt.xlabel("Expected Return")
+            plt.ylabel("Risk")
+            plt.title("Sampled Decision Variables")
+            plt.legend()
+            plt.grid(True)
+            plt.show()
+        else:
+            fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+            
+            axs[0].scatter([x[0] for x in random_points], [x[1] for x in random_points], alpha=0.8)
+            axs[0].scatter([x[0] for x in solutions], [x[1] for x in solutions], color="red", linewidths=2)
+            axs[0].set_xlabel("Expected Gain")
+            axs[0].set_ylabel("Risk")
+            axs[0].set_title("Expected Gain vs Risk")
+            
+            axs[1].scatter([x[1] for x in random_points], [x[2] for x in random_points], alpha=0.8)
+            axs[1].scatter([x[1] for x in solutions], [x[2] for x in solutions], color="red", linewidths=2)
+            axs[1].set_xlabel("Risk")
+            axs[1].set_ylabel("Non-Zero Weights")
+            axs[1].set_title("Risk vs Non-Zero Weights")
+            
+            axs[2].scatter([x[0] for x in random_points], [x[2] for x in random_points], alpha=0.8)
+            axs[2].scatter([x[0] for x in solutions], [x[2] for x in solutions], color="red", linewidths=2)
+            axs[2].set_xlabel("Expected Gain")
+            axs[2].set_ylabel("Non-Zero Weights")
+            axs[2].set_title("Expected Gain vs Non-Zero Weights")
+            
+            for ax in axs:
+                ax.grid(True)
+            
+            plt.tight_layout()
+            plt.show()
+
+    def plot_front_real_3D(self, solutions, color=True):
+        fig = go.Figure()
+
+        if color:
+            solution_colors = [x[2] for x in solutions]
+            fig.add_trace(go.Scatter3d(
+                x=[x[0] for x in solutions], 
+                y=[x[1] for x in solutions], 
+                z=[x[2] for x in solutions], 
+                mode='markers',
+                marker=dict(
+                    size=6,
+                    color=solution_colors,
+                    colorscale='oranges',
+                    cmin=min(solution_colors),
+                    cmax=max(solution_colors),
+                    colorbar=dict(title="Solution Non-Zero Weights"),
+                    line=dict(width=1, color='black')
+                ),
+                name='Front Solutions'
+            ))
+        else:
+            fig.add_trace(go.Scatter3d(
+                x=[x[0] for x in solutions], 
+                y=[x[1] for x in solutions], 
+                z=[x[2] for x in solutions], 
+                mode='markers',
+                marker=dict(
+                    size=6,
+                    color='red',
+                    line=dict(width=1, color='black')
+                ),
+                name='Front Solutions'
+            ))
+
+        # Update layout for better visualization
+        fig.update_layout(
+            title="3D Front Visualization",
+            scene=dict(
+                xaxis_title="Expected Return",
+                yaxis_title="Risk",
+                zaxis_title="Non-Zero Weights"
+            ),
+            margin=dict(l=0, r=0, b=0, t=40),
+        )
+
+        fig.show()
+
+
+    def plot_fronts_heatmap(self, populations):
+        plt.figure(figsize=(10, 9))
+        cmap = cm.get_cmap("coolwarm", len(populations))  # Color gradient
+        
+        for gen_idx, solutions in enumerate(populations):
+            color = cmap(gen_idx / len(populations))  # Normalize color scale
+            
+            # Extracting front points
+            front_x = [x[0] for x in solutions]
+            front_y = [x[1] for x in solutions]
+            
+            # Plot the front with varying brightness
+            plt.scatter(front_x, front_y, color=color, label=f'Gen {gen_idx + 1}', alpha=0.8)
+        
+        plt.xlabel("Expected Return")
+        plt.ylabel("Risk")
+        plt.title("Pareto Front Evolution Over Generations")
+        plt.grid(True)
+        plt.show()
+
+class GeneticExperimentRunner():
+    def get_hypervolume_vs_population_size_vs_generations(self, pop_sizes, generations, data, predictions, risks):
+        results = []
+        for num_dims in [2, 3]:
+            for pop_size in pop_sizes:
+                for generation in generations:
+                    GS = GeneticSolver(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
+                    population = GS.genetic_optimize(generations=generation, neighborhood_size=5)
+                    if num_dims == 2:
+                        ref_point = np.array([1.1, 1.1], dtype=np.float32)
+                    else:
+                        ref_point = np.array([1.1, 1.1, 1.1], dtype=np.float32)
+                    population_values = GS.normalize_population_values(population, num_dims=num_dims)
+                    if num_dims == 2:
+                        hv_value = calculate_2d_hyperarea(population_values, ref_point)
+                    else:
+                        hv_value = calculate_3d_hypervolume(population_values, ref_point)
+                    results.append([num_dims, pop_size, generation, hv_value])
+        self.results = results
+
+    def plot_hypervolume_vs_population_size_vs_generations(self):
+        results = np.array(self.results)
+        
+        sns.set_style("whitegrid")
+        fig, axes = plt.subplots(1, 2, figsize=(18, 10))
+        
+        for num_dims, ax in zip([2, 3], axes):
+            subset = results[results[:, 0] == num_dims]
+            
+            for generation in np.unique(subset[:, 2]):
+                filtered = subset[subset[:, 2] == generation]
+                ax.plot(
+                    filtered[:, 1],
+                    filtered[:, 3],
+                    marker='o',
+                    linestyle='-',
+                    label=f"Generations: {int(generation)}"
+                )
+            
+            ax.set_title(f"Hypervolume vs Population Size (Dimensions: {num_dims})")
+            ax.set_xlabel("Population Size")
+            ax.set_ylabel("Hypervolume" if num_dims == 3 else "Hyperarea")
+            ax.legend()
+        
+        plt.tight_layout()
+        plt.show()
+
+    def get_genetic_vs_classic(self, data, predictions, risks, num_retries=10):
+        solver = Solver(data, predictions, risks)
+        GS = GeneticSolver(data, predictions, risks, population_size=None, mutation_probability=0.8, weight_size=20, num_dimensions=2)
+        self.wsm_solutions_step_001 = transform_solution(solver.solve_wsm(step = 0.01))
+        self.wsm_solutions_step_025 = transform_solution(solver.solve_wsm(step = 0.05))
+        self.wsm_solutions_step_010 = transform_solution(solver.solve_wsm(step = 0.1))
+        self.ecm_solutions_100 = transform_solution(solver.solve_ecm(num_thresholds=101))
+        self.ecm_solutions_20 = transform_solution(solver.solve_ecm(num_thresholds=21))
+        self.ecm_solutions_10 = transform_solution(solver.solve_ecm(num_thresholds=11))
+        
+        self.wsm_solutions_step_001_hv = calculate_2d_hyperarea(GS.normalize_population_values(self.wsm_solutions_step_001[:, 2: ], num_dims = 2))
+        self.wsm_solutions_step_025_hv = calculate_2d_hyperarea(GS.normalize_population_values(self.wsm_solutions_step_025[:, 2: ], num_dims = 2))
+        self.wsm_solutions_step_010_hv = calculate_2d_hyperarea(GS.normalize_population_values(self.wsm_solutions_step_010[:, 2: ], num_dims = 2))
+        self.ecm_solutions_100_hv = calculate_2d_hyperarea(GS.normalize_population_values(self.ecm_solutions_100[:, 2: ], num_dims = 2))
+        self.ecm_solutions_20_hv = calculate_2d_hyperarea(GS.normalize_population_values(self.ecm_solutions_20[:, 2: ], num_dims = 2))
+        self.ecm_solutions_10_hv = calculate_2d_hyperarea(GS.normalize_population_values(self.ecm_solutions_10[:, 2: ], num_dims = 2))
+        results = []
+        front = []
+        for retry in range(num_retries):
+            for pop_size in [10, 20, 100]:
+                GS = GeneticSolver(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
+                GS.enable_loging()
+                GS.genetic_optimize(generations=150, neighborhood_size=5)
+                population_history = GS.population_history
+                for pop_index, population in enumerate(population_history):
+                    ref_point = np.array([1.1, 1.1], dtype=np.float32)
+                    population_values = GS.normalize_population_values(population, num_dims=2)
+                    hv_value = calculate_2d_hyperarea(population_values, ref_point)
+                    results.append([pop_size, pop_index, retry, hv_value])
+        self.results = results
+
+    def plot_genetic_vs_classic(self):
+        results_df = pd.DataFrame(self.results, columns=['pop_size', 'generation', 'retry', 'hv_value'])
+        
+        wsm_hvs = [
+            np.mean(self.wsm_solutions_step_001_hv),
+            np.mean(self.wsm_solutions_step_025_hv),
+            np.mean(self.wsm_solutions_step_010_hv)
+        ]
+        ecm_hvs = [
+            np.mean(self.ecm_solutions_100_hv),
+            np.mean(self.ecm_solutions_20_hv),
+            np.mean(self.ecm_solutions_10_hv)
+        ]
+        
+        pop_sizes = [10, 20, 100]
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        sns.set_style("whitegrid")
+        
+        y_min = results_df['hv_value'].min()
+        y_max = results_df['hv_value'].max()
+        
+        for i, pop_size in enumerate(pop_sizes):
+            subset = results_df[results_df['pop_size'] == pop_size]
+            subset['scaled_generation'] = subset['generation']/pop_size  # Scale generations
+            stats = subset.groupby('scaled_generation')['hv_value'].agg(['mean', 'std'])
+
+            axes[i].plot(stats.index, stats['mean'], linestyle='-', label='Genetic Algorithm')
+            axes[i].fill_between(stats.index, stats['mean'] - stats['std'], stats['mean'] + stats['std'], 
+                                color='blue', alpha=0.2, label='±1 Std Dev')
+
+            axes[i].axhline(y=wsm_hvs[i], color='r', linestyle='--', label='WSM Hypervolume')
+            axes[i].axhline(y=ecm_hvs[i], color='b', linestyle='--', label='ECM Hypervolume')
+            
+            axes[i].set_title(f'Convergence for Pop Size {pop_size}')
+            axes[i].set_xlabel('Generation (scaled)')
+            axes[i].set_ylabel('Hyperarea')
+            axes[i].set_ylim(0.1, 1.2)
+            axes[i].legend()
+        
+        plt.tight_layout()
+        plt.show()
+
+    def get_convergence(self, data, predictions, risks, num_retries=10):
+        results = []
+        for num_dims in [2, 3]:
+            for retry in range(num_retries):
+                GS = GeneticSolver(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
+                GS.enable_loging()
+                GS.genetic_optimize(generations=150, neighborhood_size=5)
+                population_history = GS.population_history
+                for pop_index, population in enumerate(population_history):
+                    if num_dims == 2:
+                        ref_point = np.array([1.1, 1.1], dtype=np.float32)
+                    else:
+                        ref_point = np.array([1.1, 1.1, 1.1], dtype=np.float32)
+                    population_values = GS.normalize_population_values(population, num_dims=num_dims)
+                    if num_dims == 2:
+                        hv_value = calculate_2d_hyperarea(population_values, ref_point)
+                    else:
+                        hv_value = calculate_3d_hypervolume(population_values, ref_point)
+                    results.append([num_dims, pop_index, retry, hv_value])
+        self.results = results
+    
+    def plot_convergence(self):
+        results = self.results
+        results_df = pd.DataFrame(results, columns=['num_dims', 'generation', 'retry', 'hv_value'])
+        
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        sns.set_style("whitegrid")
+
+        global_min = results_df['hv_value'].min()
+        global_max = results_df['hv_value'].max()
+        y_margin = 0.05 * (global_max - global_min)
+        y_limits = (global_min - y_margin, global_max + y_margin)
+
+        for i, num_dims in enumerate([2, 3]):
+            subset = results_df[results_df['num_dims'] == num_dims]
+            subset['scaled_generation'] = subset['generation']/100
+            stats = subset.groupby('scaled_generation')['hv_value'].agg(['mean', 'std'])
+
+            axes[i, 0].plot(stats.index, stats['mean'], linestyle='-', label='Mean HV')
+            axes[i, 0].fill_between(stats.index, stats['mean'] - stats['std'], stats['mean'] + stats['std'], 
+                                    color='blue', alpha=0.2, label='±1 Std Dev')
+            
+            axes[i, 0].set_title(f"Convergence over Generations (Dimensions: {num_dims})")
+            axes[i, 0].set_xlabel("Generation (scaled)")
+            axes[i, 0].set_ylabel("Mean Hypervolume" if num_dims == 3 else "Mean Hyperarea")
+            axes[i, 0].set_ylim(y_limits)
+            axes[i, 0].legend()
+            
+            selected_generations = [1, 25, 50, 75, 100]
+            subset_selected = subset[subset['scaled_generation'].isin(selected_generations)]
+            sns.boxplot(x='scaled_generation', y='hv_value', data=subset_selected, ax=axes[i, 1])
+            axes[i, 1].set_title(f"Hypervolume Distribution per Generation (Dimensions: {num_dims})")
+            axes[i, 1].set_xlabel("Generation (scaled)")
+            axes[i, 1].set_ylabel("Hypervolume" if num_dims == 3 else "Hyperarea")
+            axes[i, 1].set_ylim(y_limits)
+        
         plt.tight_layout()
         plt.show()
 
