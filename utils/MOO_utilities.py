@@ -437,7 +437,6 @@ class RegressionModelsCombined():
         plt.tight_layout()
         plt.show()
 
-
 class Solver():
     def __init__(self, data, predicted_vals, risks):
         self.data = data
@@ -1092,7 +1091,87 @@ class GeneticSolver(Solver):
             plt.tight_layout()
             plt.show()
 
-    def plot_front_real_3D(self, solutions, color=True):
+    def plot_many_3D(self, solutions1, solutions2, solutions3, n=20, step=0.2):
+        random_points = []
+        
+        # Generate uniform weights for the front
+        results = self._generate_uniform_weights(n, step)
+        for res in results:
+            sol_weights = np.array(res)
+            f1, f2 = self.get_objective_values(sol_weights)  # Assuming f3 exists
+            f3 = np.sum(sol_weights < 0.01) / self.weight_size
+            random_points.append((f1, f2, f3))
+        
+        # Create subplots (2D)
+        fig, axs = plt.subplots(1, 3, figsize=(20, 8))
+
+        # First subplot: Solutions 1 with 'viridis' color map (representing f3)
+        scatter1 = axs[0].scatter(
+            [x[0] for x in random_points],
+            [x[1] for x in random_points],
+            c=[x[2] for x in random_points],  # Color by f3
+            cmap='viridis',
+            alpha=0.6
+        )
+        axs[0].scatter(
+            [x[0] for x in solutions1],
+            [x[1] for x in solutions1],
+            c=[x[2] for x in solutions1],
+            cmap='viridis',  # Same color map for solutions
+            edgecolors='k',
+            linewidths=2
+        )
+        axs[0].set_xlabel("Expected Return")
+        axs[0].set_ylabel("Risk")
+        axs[0].set_title("Solution Population 1 (Viridis)")
+        fig.colorbar(scatter1, ax=axs[0], label='Non-Zero Weights')
+
+        # Second subplot: Solutions 2 with 'plasma' color map (representing f3)
+        scatter2 = axs[1].scatter(
+            [x[0] for x in random_points],
+            [x[1] for x in random_points],
+            c=[x[2] for x in random_points],  # Color by f3
+            cmap='plasma',
+            alpha=0.6
+        )
+        axs[1].scatter(
+            [x[0] for x in solutions2],
+            [x[1] for x in solutions2],
+            c=[x[2] for x in solutions2],
+            cmap='plasma',  # Same color map for solutions
+            edgecolors='k',
+            linewidths=2
+        )
+        axs[1].set_xlabel("Expected Return")
+        axs[1].set_ylabel("Risk")
+        axs[1].set_title("Solution Population 2 (Plasma)")
+        fig.colorbar(scatter2, ax=axs[1], label='Non-Zero Weights')
+
+        # Third subplot: Solutions 3 with 'inferno' color map (representing f3)
+        scatter3 = axs[2].scatter(
+            [x[0] for x in random_points],
+            [x[1] for x in random_points],
+            c=[x[2] for x in random_points],  # Color by f3
+            cmap='cool',
+            alpha=0.6
+        )
+        axs[2].scatter(
+            [x[0] for x in solutions3],
+            [x[1] for x in solutions3],
+            c=[x[2] for x in solutions3],
+            cmap='cool',  # Same color map for solutions
+            edgecolors='k',
+            linewidths=2
+        )
+        axs[2].set_xlabel("Expected Return")
+        axs[2].set_ylabel("Risk")
+        axs[2].set_title("Solution Population 3 (Cool)")
+        fig.colorbar(scatter3, ax=axs[2], label='Non-Zero Weights')
+
+        plt.tight_layout()
+        plt.show()
+
+    def plot_front_real_3D(self, solutions, color=True, colorscale="agsunset"):
         fig = go.Figure()
 
         if color:
@@ -1105,7 +1184,7 @@ class GeneticSolver(Solver):
                 marker=dict(
                     size=6,
                     color=solution_colors,
-                    colorscale='oranges',
+                    colorscale=colorscale,
                     cmin=min(solution_colors),
                     cmax=max(solution_colors),
                     colorbar=dict(title="Solution Non-Zero Weights"),
@@ -1160,6 +1239,47 @@ class GeneticSolver(Solver):
         plt.title("Pareto Front Evolution Over Generations")
         plt.grid(True)
         plt.show()
+
+    def plot_many(self, solutions1, solutions2, solutions3, n=20, step=0.2):
+        random_points = []
+        
+        # Generate uniform weights for the front
+        results = self._generate_uniform_weights(n, step)
+        for res in results:
+            sol_weights = np.array(res)
+            f1, f2 = self.get_objective_values(sol_weights)
+            random_points.append((f1, f2))
+        
+        # Create subplots
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # First subplot: Solutions 1 with red color
+        axes[0].scatter([x[0] for x in random_points], [x[1] for x in random_points], alpha=0.8)
+        axes[0].scatter([x[0] for x in solutions1], [x[1] for x in solutions1], color="red", linewidths=3)
+        axes[0].set_xlabel("Expected Return")
+        axes[0].set_ylabel("Risk")
+        axes[0].set_title("Solution Population 1")
+        axes[0].grid(True)
+        
+        # Second subplot: Solutions 2 with green color
+        axes[1].scatter([x[0] for x in random_points], [x[1] for x in random_points], alpha=0.8)
+        axes[1].scatter([x[0] for x in solutions2], [x[1] for x in solutions2], color="green", linewidths=3)
+        axes[1].set_xlabel("Expected Return")
+        axes[1].set_ylabel("Risk")
+        axes[1].set_title("Solution Population 2")
+        axes[1].grid(True)
+        
+        # Third subplot: Solutions 3 with orange color
+        axes[2].scatter([x[0] for x in random_points], [x[1] for x in random_points], alpha=0.8)
+        axes[2].scatter([x[0] for x in solutions3], [x[1] for x in solutions3], color="orange", linewidths=3)
+        axes[2].set_xlabel("Expected Return")
+        axes[2].set_ylabel("Risk")
+        axes[2].set_title("Solution Population 3")
+        axes[2].grid(True)
+        
+        plt.tight_layout()
+        plt.show()
+
 
 class GeneticExperimentRunner():
     def get_hypervolume_vs_population_size_vs_generations(self, pop_sizes, generations, data, predictions, risks):
@@ -1228,20 +1348,46 @@ class GeneticExperimentRunner():
         front = []
         for retry in range(num_retries):
             for pop_size in [10, 20, 100]:
-                GS = GeneticSolver(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
-                GS.enable_loging()
-                GS.genetic_optimize(generations=150, neighborhood_size=5)
-                population_history = GS.population_history
-                for pop_index, population in enumerate(population_history):
+                GS1 = GeneticSolver(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
+                GS1.enable_loging()
+                GS1.genetic_optimize(generations=150, neighborhood_size=5)
+
+                GS2 = GeneticSolver(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
+                GS2.enable_loging()
+                GS2.genetic_optimize(generations=150, neighborhood_size=5)
+
+                GS3 = GeneticSolver(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
+                GS3.enable_loging()
+                GS3.genetic_optimize(generations=150, neighborhood_size=5)
+
+
+                population_history_1 = GS1.population_history
+                population_history_2 = GS2.population_history
+                population_history_3 = GS3.population_history
+
+                for pop_index, population in enumerate(population_history_1):
                     ref_point = np.array([1.1, 1.1], dtype=np.float32)
                     population_values = GS.normalize_population_values(population, num_dims=2)
                     hv_value = calculate_2d_hyperarea(population_values, ref_point)
-                    results.append([pop_size, pop_index, retry, hv_value])
+                    results.append(["population_1", pop_size, pop_index, retry, hv_value])
+
+                for pop_index, population in enumerate(population_history_1):
+                    ref_point = np.array([1.1, 1.1], dtype=np.float32)
+                    population_values = GS.normalize_population_values(population, num_dims=2)
+                    hv_value = calculate_2d_hyperarea(population_values, ref_point)
+                    results.append(["population_2", pop_size, pop_index, retry, hv_value])
+
+                for pop_index, population in enumerate(population_history_1):
+                    ref_point = np.array([1.1, 1.1], dtype=np.float32)
+                    population_values = GS.normalize_population_values(population, num_dims=2)
+                    hv_value = calculate_2d_hyperarea(population_values, ref_point)
+                    results.append(["population_3", pop_size, pop_index, retry, hv_value])
+
+
         self.results = results
 
     def plot_genetic_vs_classic(self):
-        results_df = pd.DataFrame(self.results, columns=['pop_size', 'generation', 'retry', 'hv_value'])
-        
+        results_df = pd.DataFrame(self.results, columns=['population', 'pop_size', 'generation', 'retry', 'hv_value'])
         wsm_hvs = [
             np.mean(self.wsm_solutions_step_001_hv),
             np.mean(self.wsm_solutions_step_025_hv),
@@ -1254,89 +1400,137 @@ class GeneticExperimentRunner():
         ]
         
         pop_sizes = [10, 20, 100]
+        population_colors = {'population_1': 'blue', 'population_2': 'green', 'population_3': 'orange'}
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
         sns.set_style("whitegrid")
-        
         y_min = results_df['hv_value'].min()
         y_max = results_df['hv_value'].max()
-        
+
         for i, pop_size in enumerate(pop_sizes):
             subset = results_df[results_df['pop_size'] == pop_size]
-            subset['scaled_generation'] = subset['generation']/pop_size  # Scale generations
+            subset['scaled_generation'] = subset['generation'] / pop_size
             stats = subset.groupby('scaled_generation')['hv_value'].agg(['mean', 'std'])
 
-            axes[i].plot(stats.index, stats['mean'], linestyle='-', label='Genetic Algorithm')
-            axes[i].fill_between(stats.index, stats['mean'] - stats['std'], stats['mean'] + stats['std'], 
-                                color='blue', alpha=0.2, label='±1 Std Dev')
-
+            for population, color in population_colors.items():
+                pop_subset = subset[subset['population'] == population]
+                pop_stats = pop_subset.groupby('scaled_generation')['hv_value'].agg(['mean', 'std'])
+                axes[i].plot(pop_stats.index, pop_stats['mean'], linestyle='-', label=f'{population} Mean HV', color=color)
+                axes[i].fill_between(pop_stats.index, pop_stats['mean'] - pop_stats['std'], pop_stats['mean'] + pop_stats['std'], 
+                                    color=color, alpha=0.2, label=f'{population} ±1 Std Dev')
+                
             axes[i].axhline(y=wsm_hvs[i], color='r', linestyle='--', label='WSM Hypervolume')
             axes[i].axhline(y=ecm_hvs[i], color='b', linestyle='--', label='ECM Hypervolume')
-            
             axes[i].set_title(f'Convergence for Pop Size {pop_size}')
             axes[i].set_xlabel('Generation (scaled)')
             axes[i].set_ylabel('Hyperarea')
             axes[i].set_ylim(0.1, 1.2)
             axes[i].legend()
-        
+            
         plt.tight_layout()
         plt.show()
+
 
     def get_convergence(self, data, predictions, risks, num_retries=10):
         results = []
         for num_dims in [2, 3]:
             for retry in range(num_retries):
-                GS = GeneticSolver(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
-                GS.enable_loging()
-                GS.genetic_optimize(generations=150, neighborhood_size=5)
-                population_history = GS.population_history
-                for pop_index, population in enumerate(population_history):
+                GS1 = GeneticSolver(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
+                GS1.enable_loging()
+                GS1.genetic_optimize(generations=150, neighborhood_size=5)
+
+                GS2 = GeneticSolver(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
+                GS2.enable_loging()
+                GS2.genetic_optimize(generations=150, neighborhood_size=5)
+
+                GS3 = GeneticSolver(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
+                GS3.enable_loging()
+                GS3.genetic_optimize(generations=150, neighborhood_size=5)
+
+                population_history_1 = GS1.population_history
+                population_history_2 = GS2.population_history
+                population_history_3 = GS3.population_history
+
+                for pop_index, population in enumerate(population_history_1):
                     if num_dims == 2:
                         ref_point = np.array([1.1, 1.1], dtype=np.float32)
                     else:
                         ref_point = np.array([1.1, 1.1, 1.1], dtype=np.float32)
-                    population_values = GS.normalize_population_values(population, num_dims=num_dims)
+                    population_values = GS1.normalize_population_values(population, num_dims=num_dims)
                     if num_dims == 2:
                         hv_value = calculate_2d_hyperarea(population_values, ref_point)
                     else:
                         hv_value = calculate_3d_hypervolume(population_values, ref_point)
-                    results.append([num_dims, pop_index, retry, hv_value])
+                    results.append(["population_1", num_dims, pop_index, retry, hv_value])
+
+
+
+                for pop_index, population in enumerate(population_history_2):
+                    if num_dims == 2:
+                        ref_point = np.array([1.1, 1.1], dtype=np.float32)
+                    else:
+                        ref_point = np.array([1.1, 1.1, 1.1], dtype=np.float32)
+                    population_values = GS1.normalize_population_values(population, num_dims=num_dims)
+                    if num_dims == 2:
+                        hv_value = calculate_2d_hyperarea(population_values, ref_point)
+                    else:
+                        hv_value = calculate_3d_hypervolume(population_values, ref_point)
+                    results.append(["population_2", num_dims, pop_index, retry, hv_value])
+
+
+
+                for pop_index, population in enumerate(population_history_3):
+                    if num_dims == 2:
+                        ref_point = np.array([1.1, 1.1], dtype=np.float32)
+                    else:
+                        ref_point = np.array([1.1, 1.1, 1.1], dtype=np.float32)
+                    population_values = GS1.normalize_population_values(population, num_dims=num_dims)
+                    if num_dims == 2:
+                        hv_value = calculate_2d_hyperarea(population_values, ref_point)
+                    else:
+                        hv_value = calculate_3d_hypervolume(population_values, ref_point)
+                    results.append(["population_3", num_dims, pop_index, retry, hv_value])
+
         self.results = results
-    
+
     def plot_convergence(self):
         results = self.results
-        results_df = pd.DataFrame(results, columns=['num_dims', 'generation', 'retry', 'hv_value'])
-        
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        results_df = pd.DataFrame(results, columns=['population', 'num_dims', 'generation', 'retry', 'hv_value'])
+
+        # Set up the figure for convergence plotting
+        fig, ax = plt.subplots(figsize=(12, 8))
         sns.set_style("whitegrid")
 
+        # Define colors for each population's convergence line
+        population_colors = {'population_1': 'blue', 'population_2': 'green', 'population_3': 'orange'}
+
+        # Determine global min and max for y-axis limits
         global_min = results_df['hv_value'].min()
         global_max = results_df['hv_value'].max()
         y_margin = 0.05 * (global_max - global_min)
         y_limits = (global_min - y_margin, global_max + y_margin)
 
-        for i, num_dims in enumerate([2, 3]):
-            subset = results_df[results_df['num_dims'] == num_dims]
-            subset['scaled_generation'] = subset['generation']/100
+        # Loop through the populations and plot each one
+        for population, color in population_colors.items():
+            subset = results_df[results_df['population'] == population]
+            subset['scaled_generation'] = subset['generation'] / 100  # Scale the generations
+            
+            # Calculate the mean and standard deviation of hypervolume for each scaled generation
             stats = subset.groupby('scaled_generation')['hv_value'].agg(['mean', 'std'])
 
-            axes[i, 0].plot(stats.index, stats['mean'], linestyle='-', label='Mean HV')
-            axes[i, 0].fill_between(stats.index, stats['mean'] - stats['std'], stats['mean'] + stats['std'], 
-                                    color='blue', alpha=0.2, label='±1 Std Dev')
-            
-            axes[i, 0].set_title(f"Convergence over Generations (Dimensions: {num_dims})")
-            axes[i, 0].set_xlabel("Generation (scaled)")
-            axes[i, 0].set_ylabel("Mean Hypervolume" if num_dims == 3 else "Mean Hyperarea")
-            axes[i, 0].set_ylim(y_limits)
-            axes[i, 0].legend()
-            
-            selected_generations = [1, 25, 50, 75, 100]
-            subset_selected = subset[subset['scaled_generation'].isin(selected_generations)]
-            sns.boxplot(x='scaled_generation', y='hv_value', data=subset_selected, ax=axes[i, 1])
-            axes[i, 1].set_title(f"Hypervolume Distribution per Generation (Dimensions: {num_dims})")
-            axes[i, 1].set_xlabel("Generation (scaled)")
-            axes[i, 1].set_ylabel("Hypervolume" if num_dims == 3 else "Hyperarea")
-            axes[i, 1].set_ylim(y_limits)
+            # Plot mean hypervolume with the color of the respective population
+            ax.plot(stats.index, stats['mean'], linestyle='-', label=f'{population} Mean HV', color=color)
+            ax.fill_between(stats.index, stats['mean'] - stats['std'], stats['mean'] + stats['std'], 
+                            color=color, alpha=0.2, label=f'{population} ±1 Std Dev')
+
+        # Set plot labels and title
+        ax.set_title("Convergence of Three Populations over Generations")
+        ax.set_xlabel("Generation (scaled)")
+        ax.set_ylabel("Mean Hypervolume (3D)" if results_df['num_dims'].iloc[0] == 3 else "Mean Hyperarea (2D)")
+        ax.set_ylim(y_limits)
+        ax.legend()
         
+        # Display the plot
         plt.tight_layout()
         plt.show()
+
 
