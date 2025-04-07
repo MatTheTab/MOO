@@ -1280,6 +1280,140 @@ class GeneticSolver(Solver):
         plt.tight_layout()
         plt.show()
 
+class GeneticSolverGuided(GeneticSolver):
+    def __init__(self, data, predicted_vals, risks, population_size, mutation_probability, weight_size=20, num_dimensions=2):
+        super().__init__(data, predicted_vals, risks, population_size, mutation_probability, weight_size, num_dimensions)
+
+    def crossover(self, chebyshev_weights, neighborhoods, weight_to_individual_map):
+        np.random.shuffle(chebyshev_weights)
+        weight = chebyshev_weights[0]
+        neighboring_weights = neighborhoods[tuple(weight)].copy()
+        random.shuffle(neighboring_weights)
+        weight_parent_1, weight_parent_2 = neighboring_weights[:2]
+        parent_1, parent_2 = weight_to_individual_map[weight_parent_1], weight_to_individual_map[weight_parent_2]
+        alpha = np.random.rand()
+        offspring = alpha * parent_1 + (1 - alpha) * parent_2
+        offspring = offspring / np.sum(offspring)
+        return offspring, weight
+    
+    def mutate(self, individual):
+        if random.random() < self.mutation_prob:
+            idx_1 = random.randint(0, len(individual) - 1)
+            individual[idx_1] = 1.0
+        return individual/np.sum(individual)
+    
+    def perform_selection(self, offspring, weight_to_individual_map, origin_weight, neighborhoods):
+        complete_pool = []
+        for weight in neighborhoods[tuple(origin_weight)]:
+            complete_pool.append(weight_to_individual_map[tuple(weight)])
+        complete_pool.append(offspring)
+        complete_pool = np.array(complete_pool, dtype=np.float32)
+        next_generation = []
+        for weight in neighborhoods[tuple(origin_weight)]:
+            current_best = weight_to_individual_map[tuple(weight)]
+            if self.num_dimensions == 3:
+                chebyshev_distance_current = self.calculate_chebyshev_3d_distance(weight, weight_to_individual_map[tuple(weight)])
+            else:
+                chebyshev_distance_current = self.calculate_chebyshev_distance(weight, weight_to_individual_map[tuple(weight)])
+            if self.num_dimensions == 3:
+                chebyshev_distance_new = self.calculate_chebyshev_3d_distance(weight, offspring)
+            else:
+                chebyshev_distance_new = self.calculate_chebyshev_distance(weight, offspring)
+            if chebyshev_distance_new < chebyshev_distance_current:
+                current_best = offspring
+                chebyshev_distance_current = chebyshev_distance_new
+            weight_to_individual_map[tuple(weight)] = current_best
+        for key in weight_to_individual_map:
+            next_generation.append(weight_to_individual_map[key])
+        return np.array(next_generation, dtype=np.float32), weight_to_individual_map
+    
+    def initialize_deltas(self, weight_to_individual_map):
+        deltas = {}
+        for weight in weight_to_individual_map:
+            deltas[weight] = []
+        return deltas
+    
+    def update_deltas(self, deltas, weight_to_individual_map):
+        for weight in weight_to_individual_map:
+            deltas[weight].append(weight_to_individual_map[weight].copy())
+        return deltas
+
+    def calculate_deltas(self, delta_list):
+        if not delta_list or len(delta_list) < 2:
+            return np.zeros(len(delta_list[0]) if delta_list else 0)
+
+        prev = None
+        last = None
+
+        # Iterate from the end to find the last two different vectors
+        for vec in reversed(delta_list):
+            vec = np.array(vec)
+            if last is None:
+                last = vec
+            elif not np.array_equal(vec, last):
+                prev = vec
+                break
+
+        if prev is None:
+            return np.zeros(len(last))  # No meaningful change
+
+        return last - prev
+
+    def mutate_with_delta(self, parent, avg_delta, scale=0.1):
+        parent = np.array(parent)
+        avg_delta = np.array(avg_delta)
+        noise = np.random.normal(loc=avg_delta, scale=scale, size=len(parent))
+        mutated = parent + noise
+        mutated = np.clip(mutated, 0, 1)
+        total = np.sum(mutated)
+        if total == 0:
+            mutated = np.ones_like(mutated) / len(mutated)
+        else:
+            mutated /= total
+        return mutated
+
+    def deltas_mutate(self, offspring, deltas, origin_weight, neighborhoods, weight_to_individual_map):
+        neighboring_weights = neighborhoods[tuple(origin_weight)]
+        if random.random() < self.mutation_prob:
+            # You can still use distance-based neighbor selection if you want:
+            closest_neighbor = min(
+                neighboring_weights,
+                key=lambda neighbor: np.linalg.norm(offspring - weight_to_individual_map[neighbor])
+            )
+
+            # closest_neighbor = random.choice(neighboring_weights)
+
+            delta = self.calculate_deltas(deltas[tuple(closest_neighbor)])
+            offspring = self.mutate_with_delta(offspring, delta, scale=0.5)
+
+        return offspring
+
+
+
+    def genetic_optimize(self, generations=100, neighborhood_size=2, gen_threshold=5):
+        generations = generations*self.population_size
+        gen_threshold = gen_threshold * self.population_size
+        chebyshev_weights = self.initialize_chebyshev()
+        neighborhoods = self.find_neighborhoods(chebyshev_weights, neighborhood_size)
+        population = self.generate_population()
+        weight_to_individual_map = self.assign_chebyshev_weights(population, chebyshev_weights)
+        deltas = self.initialize_deltas(weight_to_individual_map)
+
+        for generation in range(generations):
+            offspring, origin_weight = self.crossover(chebyshev_weights, neighborhoods, weight_to_individual_map)
+            if generation < gen_threshold:
+                offspring = self.mutate(offspring)
+            else:
+                if random.random() < 0.5:
+                    offspring = self.deltas_mutate(offspring, deltas, origin_weight, neighborhoods, weight_to_individual_map)
+                else:
+                    offspring = self.mutate(offspring)
+            population, weight_to_individual_map = self.perform_selection(offspring, weight_to_individual_map, origin_weight, neighborhoods)
+            deltas = self.update_deltas(deltas, weight_to_individual_map)
+            if self.log_history:
+                self.population_history.append(self.normalize(population.copy()))
+        return population
+
 
 class GeneticExperimentRunner():
     def get_hypervolume_vs_population_size_vs_generations(self, pop_sizes, generations, data, predictions, risks):
