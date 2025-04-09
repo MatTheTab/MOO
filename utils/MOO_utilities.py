@@ -1280,6 +1280,94 @@ class GeneticSolver(Solver):
         plt.tight_layout()
         plt.show()
 
+class GeneticSolverVaried(GeneticSolver):
+    def __init__(self, data, predicted_vals, risks, population_size, mutation_probability, weight_size=20, num_dimensions=2):
+        super().__init__(data, predicted_vals, risks, population_size, mutation_probability, weight_size, num_dimensions)
+
+    def freaky_mutate(self, individual):
+        np.random.shuffle(individual)
+        return individual
+    
+    def convergent_mutate(self, individual, weight_to_individual_map, neighborhoods):
+        non_mutated = individual.copy()
+        if self.num_dimensions < 3:
+            cheb_distance = self.calculate_chebyshev_distance
+        else:
+            cheb_distance = self.calculate_chebyshev_3d_distance
+        
+        closest_weight = min(
+            weight_to_individual_map.keys(),
+            key=lambda w: cheb_distance(w, individual)
+        )
+
+        cheb_distance_before = cheb_distance(closest_weight, non_mutated)
+
+        best_solution = weight_to_individual_map[closest_weight]
+        min_idx = np.argmin(best_solution)
+        max_idx = np.argmax(best_solution)
+        mutation_type = random.random()
+        if mutation_type < 1/3:
+            individual[max_idx] = random.random()
+        elif mutation_type < 2/3:
+            individual[min_idx] = random.random()
+        else:
+            individual[random.randint(0, len(individual)-1)] = random.random()
+        
+        individual /= np.sum(individual)
+        cheb_distance_after = cheb_distance(closest_weight, individual)
+        if cheb_distance_before < cheb_distance_after:
+            return individual
+        return non_mutated
+    
+    def convergent_mutate_2(self, individual, weight_to_individual_map, neighborhoods):
+        if self.num_dimensions < 3:
+            cheb_distance = self.calculate_chebyshev_distance
+        else:
+            cheb_distance = self.calculate_chebyshev_3d_distance
+    
+        if random.random() < self.mutation_prob:
+            closest_weight = min(
+                weight_to_individual_map.keys(),
+                key=lambda w: cheb_distance(w, individual)
+            )
+
+            best_solution = weight_to_individual_map[closest_weight]
+            min_idx = np.argmin(best_solution)
+            max_idx = np.argmax(best_solution)
+            mutation_type = random.random()
+            if mutation_type < 1/3:
+                individual[max_idx] = random.random()
+            elif mutation_type < 2/3:
+                individual[min_idx] = random.random()
+            else:
+                individual[random.randint(0, len(individual)-1)] = random.random()
+        return individual / np.sum(individual)
+
+
+    def mutate(self, individual, weight_to_individual_map, neighborhoods):
+        if random.random() < self.mutation_prob:
+            count = sum(1 for ind in weight_to_individual_map.values() if np.array_equal(ind, individual))
+            if count > 1:
+                individual = self.freaky_mutate(individual)
+            else:
+                individual = self.convergent_mutate(individual, weight_to_individual_map, neighborhoods)
+        return individual
+
+    def genetic_optimize(self, generations=100, neighborhood_size=2):
+        generations = generations*self.population_size
+        chebyshev_weights = self.initialize_chebyshev()
+        neighborhoods = self.find_neighborhoods(chebyshev_weights, neighborhood_size)
+        population = self.generate_population()
+        weight_to_individual_map = self.assign_chebyshev_weights(population, chebyshev_weights)
+        for generation in range(generations):
+            offspring, origin_weight = self.crossover(chebyshev_weights, neighborhoods, weight_to_individual_map)
+            offspring = self.mutate(offspring, weight_to_individual_map, neighborhoods)
+            population, weight_to_individual_map = self.perform_selection(offspring, weight_to_individual_map, origin_weight, neighborhoods)
+            if self.log_history:
+                self.population_history.append(self.normalize(population.copy()))
+        return population
+
+
 class GeneticSolverGuided(GeneticSolver):
     def __init__(self, data, predicted_vals, risks, population_size, mutation_probability, weight_size=20, num_dimensions=2):
         super().__init__(data, predicted_vals, risks, population_size, mutation_probability, weight_size, num_dimensions)
@@ -1486,11 +1574,11 @@ class GeneticExperimentRunner():
                 GS1.enable_loging()
                 GS1.genetic_optimize(generations=150, neighborhood_size=5)
 
-                GS2 = GeneticSolver(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
+                GS2 = GeneticSolverGuided(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
                 GS2.enable_loging()
                 GS2.genetic_optimize(generations=150, neighborhood_size=5)
 
-                GS3 = GeneticSolver(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
+                GS3 = GeneticSolverVaried(data, predictions, risks, population_size=pop_size, mutation_probability=0.8, weight_size=20, num_dimensions=2)
                 GS3.enable_loging()
                 GS3.genetic_optimize(generations=150, neighborhood_size=5)
 
@@ -1503,19 +1591,19 @@ class GeneticExperimentRunner():
                     ref_point = np.array([1.1, 1.1], dtype=np.float32)
                     population_values = GS.normalize_population_values(population, num_dims=2)
                     hv_value = calculate_2d_hyperarea(population_values, ref_point)
-                    results.append(["population_1", pop_size, pop_index, retry, hv_value])
+                    results.append(["Basic", pop_size, pop_index, retry, hv_value])
 
-                for pop_index, population in enumerate(population_history_1):
+                for pop_index, population in enumerate(population_history_2):
                     ref_point = np.array([1.1, 1.1], dtype=np.float32)
                     population_values = GS.normalize_population_values(population, num_dims=2)
                     hv_value = calculate_2d_hyperarea(population_values, ref_point)
-                    results.append(["population_2", pop_size, pop_index, retry, hv_value])
+                    results.append(["Guided", pop_size, pop_index, retry, hv_value])
 
-                for pop_index, population in enumerate(population_history_1):
+                for pop_index, population in enumerate(population_history_3):
                     ref_point = np.array([1.1, 1.1], dtype=np.float32)
                     population_values = GS.normalize_population_values(population, num_dims=2)
                     hv_value = calculate_2d_hyperarea(population_values, ref_point)
-                    results.append(["population_3", pop_size, pop_index, retry, hv_value])
+                    results.append(["Varied", pop_size, pop_index, retry, hv_value])
 
 
         self.results = results
@@ -1534,7 +1622,7 @@ class GeneticExperimentRunner():
         ]
         
         pop_sizes = [10, 20, 100]
-        population_colors = {'population_1': 'blue', 'population_2': 'green', 'population_3': 'orange'}
+        population_colors = {'Basic': 'blue', 'Guided': 'green', 'Varied': 'orange'}
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
         sns.set_style("whitegrid")
         y_min = results_df['hv_value'].min()
@@ -1572,11 +1660,11 @@ class GeneticExperimentRunner():
                 GS1.enable_loging()
                 GS1.genetic_optimize(generations=150, neighborhood_size=5)
 
-                GS2 = GeneticSolver(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
+                GS2 = GeneticSolverGuided(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
                 GS2.enable_loging()
                 GS2.genetic_optimize(generations=150, neighborhood_size=5)
 
-                GS3 = GeneticSolver(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
+                GS3 = GeneticSolverVaried(data, predictions, risks, population_size=100, mutation_probability=0.8, weight_size=20, num_dimensions=num_dims)
                 GS3.enable_loging()
                 GS3.genetic_optimize(generations=150, neighborhood_size=5)
 
@@ -1594,7 +1682,7 @@ class GeneticExperimentRunner():
                         hv_value = calculate_2d_hyperarea(population_values, ref_point)
                     else:
                         hv_value = calculate_3d_hypervolume(population_values, ref_point)
-                    results.append(["population_1", num_dims, pop_index, retry, hv_value])
+                    results.append(["Basic", num_dims, pop_index, retry, hv_value])
 
 
 
@@ -1603,12 +1691,12 @@ class GeneticExperimentRunner():
                         ref_point = np.array([1.1, 1.1], dtype=np.float32)
                     else:
                         ref_point = np.array([1.1, 1.1, 1.1], dtype=np.float32)
-                    population_values = GS1.normalize_population_values(population, num_dims=num_dims)
+                    population_values = GS2.normalize_population_values(population, num_dims=num_dims)
                     if num_dims == 2:
                         hv_value = calculate_2d_hyperarea(population_values, ref_point)
                     else:
                         hv_value = calculate_3d_hypervolume(population_values, ref_point)
-                    results.append(["population_2", num_dims, pop_index, retry, hv_value])
+                    results.append(["Guided", num_dims, pop_index, retry, hv_value])
 
 
 
@@ -1617,12 +1705,12 @@ class GeneticExperimentRunner():
                         ref_point = np.array([1.1, 1.1], dtype=np.float32)
                     else:
                         ref_point = np.array([1.1, 1.1, 1.1], dtype=np.float32)
-                    population_values = GS1.normalize_population_values(population, num_dims=num_dims)
+                    population_values = GS3.normalize_population_values(population, num_dims=num_dims)
                     if num_dims == 2:
                         hv_value = calculate_2d_hyperarea(population_values, ref_point)
                     else:
                         hv_value = calculate_3d_hypervolume(population_values, ref_point)
-                    results.append(["population_3", num_dims, pop_index, retry, hv_value])
+                    results.append(["Varied", num_dims, pop_index, retry, hv_value])
 
         self.results = results
 
@@ -1635,7 +1723,7 @@ class GeneticExperimentRunner():
         sns.set_style("whitegrid")
 
         # Define colors for each population's convergence line
-        population_colors = {'population_1': 'blue', 'population_2': 'green', 'population_3': 'orange'}
+        population_colors = {'Basic': 'blue', 'Guided': 'green', 'Varied': 'orange'}
 
         # Determine global min and max for y-axis limits
         global_min = results_df['hv_value'].min()
